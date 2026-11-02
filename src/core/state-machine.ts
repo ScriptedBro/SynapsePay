@@ -13,24 +13,54 @@ export class InvalidStateTransitionError extends Error {
 
 export class EscrowStateMachine {
   private static readonly VALID_TRANSITIONS: Record<EscrowState, EscrowState[]> = {
-    [EscrowState.DRAFT]: [EscrowState.ESCROW_PENDING, EscrowState.VOIDED],
-    [EscrowState.ESCROW_PENDING]: [EscrowState.ESCROW_LOCKED, EscrowState.VOIDED],
-    [EscrowState.ESCROW_LOCKED]: [EscrowState.IN_PROGRESS, EscrowState.VOIDED],
-    [EscrowState.IN_PROGRESS]: [EscrowState.ARBITRATION_PENDING, EscrowState.VOIDED],
+    [EscrowState.DRAFT]: [
+      EscrowState.NEGOTIATING,
+      EscrowState.ESCROW_PENDING,
+      EscrowState.VOIDED,
+    ],
+    [EscrowState.NEGOTIATING]: [
+      EscrowState.ESCROW_PENDING,
+      EscrowState.VOIDED,
+    ],
+    [EscrowState.ESCROW_PENDING]: [
+      EscrowState.ESCROW_LOCKED,
+      EscrowState.VOIDED,
+    ],
+    [EscrowState.ESCROW_LOCKED]: [
+      EscrowState.IN_PROGRESS,
+      EscrowState.VOIDED,
+    ],
+    [EscrowState.IN_PROGRESS]: [
+      EscrowState.ARBITRATION_PENDING,
+      EscrowState.DISPUTED,
+      EscrowState.VOIDED,
+    ],
     [EscrowState.ARBITRATION_PENDING]: [
+      EscrowState.MILESTONE_SETTLED,
       EscrowState.SETTLED,
       EscrowState.REMEDIATION_REQUIRED,
-      EscrowState.VOIDED,
       EscrowState.DISPUTED,
+      EscrowState.VOIDED,
+    ],
+    [EscrowState.MILESTONE_SETTLED]: [
+      EscrowState.IN_PROGRESS, // Move to next milestone
+      EscrowState.SETTLED,     // Final milestone settled
+      EscrowState.DISPUTED,
+      EscrowState.VOIDED,
     ],
     [EscrowState.REMEDIATION_REQUIRED]: [
       EscrowState.ARBITRATION_PENDING,
       EscrowState.IN_PROGRESS,
+      EscrowState.DISPUTED,
       EscrowState.VOIDED,
     ],
-    [EscrowState.DISPUTED]: [EscrowState.SETTLED, EscrowState.VOIDED],
+    [EscrowState.DISPUTED]: [
+      EscrowState.MILESTONE_SETTLED,
+      EscrowState.SETTLED,
+      EscrowState.VOIDED,
+    ],
     [EscrowState.SETTLED]: [], // Terminal state
-    [EscrowState.VOIDED]: [], // Terminal state
+    [EscrowState.VOIDED]: [],  // Terminal state
   };
 
   public static canTransition(from: EscrowState, to: EscrowState): boolean {

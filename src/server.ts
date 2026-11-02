@@ -37,6 +37,7 @@ async function bootstrap() {
   const app = buildApp({
     config,
     contractManager,
+    arbitrator,
     webhookGuard,
   });
 
