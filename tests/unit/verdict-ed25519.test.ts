@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
+import crypto from 'node:crypto';
 import { SynapseArbitrator } from '../../src/arbitration/arbitrator.js';
 import { ContractSpec, SubmissionPayload } from '../../src/types/contract.js';
 
-describe('Ed25519 Asymmetric Verdict Verification (Claim 8)', () => {
+describe('Ed25519 Asymmetric Verdict Verification (P0 Fix 1 & 2)', () => {
   const secret = 'test_audit_secret_32_characters_long_1234';
   const arbitrator = new SynapseArbitrator(secret);
 
@@ -29,6 +30,7 @@ describe('Ed25519 Asymmetric Verdict Verification (Claim 8)', () => {
       maxDeliverySeconds: 3600,
       maxArbitrationRetries: 2,
       minOverallScore: 80,
+      partialReleaseThreshold: 60,
       deterministicChecks: [],
       semanticRubrics: [],
     },
@@ -56,49 +58,78 @@ describe('Ed25519 Asymmetric Verdict Verification (Claim 8)', () => {
         name: 'data.json',
         type: 'DATASET',
         content: '{"items": [1, 2, 3]}',
+        metadata: {},
       },
     ],
   };
 
-  it('signs verdicts with Ed25519 public key embedded', async () => {
+  it('persists arbitrator keypair deterministically across restarts (P0 Fix 2)', () => {
+    const arbitrator1 = new SynapseArbitrator(secret);
+    const arbitrator2 = new SynapseArbitrator(secret);
+
+    expect(arbitrator1.getPublicKey()).toBe(arbitrator2.getPublicKey());
+    expect(arbitrator1.getFingerprint()).toBe(arbitrator2.getFingerprint());
+    expect(arbitrator1.getFingerprint().length).toBe(64);
+  });
+
+  it('signs verdicts with Ed25519 public key and verifies against trusted key', async () => {
     const verdict = await arbitrator.arbitrate(sampleContract, sampleSubmission, 0);
 
-    expect(verdict.arbitratorPublicKey).toBeDefined();
+    expect(verdict.arbitratorPublicKey).toBe(arbitrator.getPublicKey());
     expect(verdict.signedVerdictSignature).toBeDefined();
     expect(verdict.signedVerdictSignature.length).toBeGreaterThan(64);
 
-    // Verify offline with public key
-    const isValid = SynapseArbitrator.verifyVerdictSignature(verdict);
+    // Verify against trusted public key
+    const isValid = SynapseArbitrator.verifyVerdictSignature(verdict, arbitrator.getPublicKey());
     expect(isValid).toBe(true);
   });
 
-  it('detects tampering with verdict decision or payout percentage', async () => {
+  it('rejects circular self-signed attacker verdicts (P0 Fix 1)', async () => {
+    // Attacker generates their own keypair
+    const { privateKey: attackerPriv, publicKey: attackerPub } = crypto.generateKeyPairSync('ed25519');
+    const attackerPubHex = (attackerPub.export({ type: 'spki', format: 'der' }) as Buffer).toString('hex');
+
+    const fakeVerdictData = {
+      contractId: sampleContract.id,
+      milestoneSequence: 1,
+      decision: 'RELEASE' as const,
+      overallScore: 100,
+      payoutPercentage: 1.0,
+      canRetry: false,
+      evaluatedAt: new Date().toISOString(),
+      deterministicResults: [],
+      semanticResults: [],
+      rationale: 'Attacker forged verdict claiming full release',
+      arbitratorPublicKey: attackerPubHex, // Attacker embeds their own key
+    };
+
+    const sig = crypto.sign(null, Buffer.from(JSON.stringify(fakeVerdictData), 'utf-8'), attackerPriv);
+    const attackerVerdict = {
+      ...fakeVerdictData,
+      signedVerdictSignature: sig.toString('hex'),
+    };
+
+    // When verified against trusted arbitrator key, attacker verdict MUST FAIL!
+    const verifiedAgainstTrusted = SynapseArbitrator.verifyVerdictSignature(
+      attackerVerdict,
+      arbitrator.getPublicKey()
+    );
+    expect(verifiedAgainstTrusted).toBe(false);
+  });
+
+  it('detects tampering with verdict decision, score, or payout percentage', async () => {
     const verdict = await arbitrator.arbitrate(sampleContract, sampleSubmission, 0);
 
     // Tampering with decision
     const tamperedDecision = { ...verdict, decision: 'REJECT' as const };
-    expect(SynapseArbitrator.verifyVerdictSignature(tamperedDecision)).toBe(false);
+    expect(SynapseArbitrator.verifyVerdictSignature(tamperedDecision, arbitrator.getPublicKey())).toBe(false);
 
     // Tampering with payoutPercentage
     const tamperedPayout = { ...verdict, payoutPercentage: 0.1 };
-    expect(SynapseArbitrator.verifyVerdictSignature(tamperedPayout)).toBe(false);
+    expect(SynapseArbitrator.verifyVerdictSignature(tamperedPayout, arbitrator.getPublicKey())).toBe(false);
 
     // Tampering with overallScore
     const tamperedScore = { ...verdict, overallScore: 10 };
-    expect(SynapseArbitrator.verifyVerdictSignature(tamperedScore)).toBe(false);
-  });
-
-  it('rejects forged signature from another keypair', async () => {
-    const otherArbitrator = new SynapseArbitrator('completely_different_secret_key_32_chars');
-    const otherVerdict = await otherArbitrator.arbitrate(sampleContract, sampleSubmission, 0);
-
-    // Swap signatures
-    const forgedVerdict = {
-      ...otherVerdict,
-      arbitratorPublicKey: arbitrator.getPublicKey(), // Claimed to be signed by arbitrator 1
-      signedVerdictSignature: otherVerdict.signedVerdictSignature, // Actually signed by arbitrator 2
-    };
-
-    expect(SynapseArbitrator.verifyVerdictSignature(forgedVerdict)).toBe(false);
+    expect(SynapseArbitrator.verifyVerdictSignature(tamperedScore, arbitrator.getPublicKey())).toBe(false);
   });
 });

@@ -54,6 +54,8 @@ const ConfigSchema = z.object({
 
   // Security
   AUDIT_HMAC_SECRET: cleanString('default_production_hmac_secret_32_chars_min_len'),
+  ARBITRATOR_PRIVATE_KEY: z.string().optional(),
+  ADMIN_API_KEY: z.string().optional(),
   ENABLE_SANDBOX_ISOLATION: z.preprocess(
     (val) => (val === 'false' || val === false ? false : true),
     z.boolean()

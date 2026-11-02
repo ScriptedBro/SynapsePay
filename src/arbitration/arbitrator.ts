@@ -1,10 +1,10 @@
 import crypto from 'node:crypto';
 import { ContractSpec, SubmissionPayload } from '../types/contract.js';
 import {
-  ArbitrationDecision,
   ArbitrationVerdict,
-  ArbitrationVerdictSchema,
+  ArbitrationDecision,
   CheckResult,
+  ArbitrationVerdictSchema,
 } from '../types/arbitration.js';
 import { DeterministicEvaluator } from './deterministic.js';
 import { SemanticEvaluator } from './semantic.js';
@@ -13,29 +13,59 @@ export class SynapseArbitrator {
   private readonly semanticEvaluator: SemanticEvaluator;
   private readonly privateKey: crypto.KeyObject;
   private readonly publicKeyHex: string;
+  private readonly fingerprint: string;
 
   constructor(
-    _hmacSecret?: string,
+    hmacSecret?: string,
     apiKey?: string,
     modelName: string = 'gpt-4o',
-    customKeyPair?: { privateKeyPem: string; publicKeyPem: string }
+    customPrivateKeyHexOrPem?: string
   ) {
     this.semanticEvaluator = new SemanticEvaluator(apiKey, modelName);
 
-    if (customKeyPair) {
-      this.privateKey = crypto.createPrivateKey(customKeyPair.privateKeyPem);
-      const pubKey = crypto.createPublicKey(customKeyPair.publicKeyPem);
-      this.publicKeyHex = pubKey.export({ type: 'spki', format: 'der' }).toString('hex');
+    if (customPrivateKeyHexOrPem) {
+      if (customPrivateKeyHexOrPem.includes('BEGIN PRIVATE KEY')) {
+        this.privateKey = crypto.createPrivateKey(customPrivateKeyHexOrPem);
+      } else {
+        const seed = Buffer.from(customPrivateKeyHexOrPem, 'hex');
+        const pkcs8Prefix = Buffer.from('302e020100300506032b657004220420', 'hex');
+        const privKeyDer = Buffer.concat([pkcs8Prefix, seed]);
+        this.privateKey = crypto.createPrivateKey({ key: privKeyDer, format: 'der', type: 'pkcs8' });
+      }
+    } else if (process.env.ARBITRATOR_PRIVATE_KEY) {
+      const envKey = process.env.ARBITRATOR_PRIVATE_KEY;
+      if (envKey.includes('BEGIN PRIVATE KEY')) {
+        this.privateKey = crypto.createPrivateKey(envKey);
+      } else {
+        const seed = Buffer.from(envKey, 'hex');
+        const pkcs8Prefix = Buffer.from('302e020100300506032b657004220420', 'hex');
+        const privKeyDer = Buffer.concat([pkcs8Prefix, seed]);
+        this.privateKey = crypto.createPrivateKey({ key: privKeyDer, format: 'der', type: 'pkcs8' });
+      }
     } else {
-      // Deterministic or ephemeral Ed25519 keypair for verifiable zero-trust signing
-      const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
-      this.privateKey = privateKey;
-      this.publicKeyHex = publicKey.export({ type: 'spki', format: 'der' }).toString('hex');
+      // Deterministic, persistent Ed25519 keypair derived from secret (P0 Fix 2)
+      // Never random ephemeral across restarts!
+      const seed = crypto
+        .createHash('sha256')
+        .update('SYNAPSE_ARBITRATOR_ED25519_V1:' + (hmacSecret || 'SYNAPSE_DEFAULT_SECRET_KEY_32_CHARS'))
+        .digest();
+      const pkcs8Prefix = Buffer.from('302e020100300506032b657004220420', 'hex');
+      const privKeyDer = Buffer.concat([pkcs8Prefix, seed]);
+      this.privateKey = crypto.createPrivateKey({ key: privKeyDer, format: 'der', type: 'pkcs8' });
     }
+
+    const pubKey = crypto.createPublicKey(this.privateKey);
+    const pubDer = pubKey.export({ type: 'spki', format: 'der' }) as Buffer;
+    this.publicKeyHex = pubDer.toString('hex');
+    this.fingerprint = crypto.createHash('sha256').update(pubDer).digest('hex');
   }
 
   public getPublicKey(): string {
     return this.publicKeyHex;
+  }
+
+  public getFingerprint(): string {
+    return this.fingerprint;
   }
 
   public async arbitrate(
@@ -75,16 +105,22 @@ export class SynapseArbitrator {
       return spec?.required && !r.passed;
     });
 
-    const passedFull = !hasRequiredFailure && overallScore >= sla.minOverallScore;
-    const partialThreshold = sla.partialReleaseThreshold ?? 60;
-    const passedPartial = !hasRequiredFailure && overallScore >= partialThreshold && overallScore < sla.minOverallScore;
+    const hasFailedClosed = semanticResults.some((r) => r.details?.failedClosed);
 
-    const canRetry = !passedFull && !passedPartial && retriesUsed < sla.maxArbitrationRetries;
+    const passedFull = !hasRequiredFailure && !hasFailedClosed && overallScore >= sla.minOverallScore;
+    const partialThreshold = sla.partialReleaseThreshold ?? 60;
+    const passedPartial = !hasRequiredFailure && !hasFailedClosed && overallScore >= partialThreshold && overallScore < sla.minOverallScore;
+
+    const canRetry = !passedFull && !passedPartial && !hasFailedClosed && retriesUsed < sla.maxArbitrationRetries;
 
     let decision: ArbitrationDecision;
     let payoutPercentage = 0;
 
-    if (passedFull) {
+    if (hasFailedClosed) {
+      // P1 Fix 11: Fail closed if AI provider failed
+      decision = ArbitrationDecision.DISPUTE;
+      payoutPercentage = 0;
+    } else if (passedFull) {
       decision = ArbitrationDecision.RELEASE;
       payoutPercentage = 1.0;
     } else if (passedPartial) {
@@ -108,7 +144,9 @@ export class SynapseArbitrator {
     const failedCheckNames = allResults.filter((r) => !r.passed).map((r) => r.name);
     let rationale = '';
 
-    if (decision === ArbitrationDecision.RELEASE) {
+    if (hasFailedClosed) {
+      rationale = `Arbitration LLM evaluation failed closed to prevent unverified fund release. Moved to DISPUTE state for manual/bilateral resolution.`;
+    } else if (decision === ArbitrationDecision.RELEASE) {
       rationale = `Deliverable satisfied all required SLA criteria with composite weighted score ${overallScore}/100. Full payout authorized.`;
     } else if (decision === ArbitrationDecision.PARTIAL_RELEASE) {
       rationale = `Deliverable achieved partial fulfillment with composite weighted score ${overallScore}/100 (Threshold: ${partialThreshold}/100). Proportional settlement of ${(payoutPercentage * 100).toFixed(0)}% authorized; remainder returned to buyer.`;
@@ -136,7 +174,7 @@ export class SynapseArbitrator {
       arbitratorPublicKey: this.publicKeyHex,
     };
 
-    // Ed25519 asymmetric signature for zero-trust independent verification (Fix for Claim 8)
+    // Ed25519 asymmetric signature for zero-trust independent verification (P0 Fix 1 & 2)
     const dataBuffer = Buffer.from(JSON.stringify(canonicalData), 'utf-8');
     const signature = crypto.sign(null, dataBuffer, this.privateKey);
     const signedVerdictSignature = signature.toString('hex');
@@ -148,10 +186,20 @@ export class SynapseArbitrator {
   }
 
   /**
-   * Independently verifies any verdict using the arbitrator's public key (offline verifier)
+   * Independently verifies any verdict using a trusted arbitrator public key (P0 Fix 1).
+   * Circular self-asserted keys are rejected!
    */
-  public static verifyVerdictSignature(verdict: ArbitrationVerdict): boolean {
+  public static verifyVerdictSignature(
+    verdict: ArbitrationVerdict,
+    trustedPublicKeyHex: string
+  ): boolean {
     try {
+      if (!trustedPublicKeyHex) return false;
+      // P0 Fix 1: Pin trusted public key from config, reject self-signed attacker payloads!
+      if (verdict.arbitratorPublicKey !== trustedPublicKeyHex) {
+        return false;
+      }
+
       const canonicalData = {
         contractId: verdict.contractId,
         milestoneSequence: verdict.milestoneSequence,
@@ -167,7 +215,7 @@ export class SynapseArbitrator {
       };
 
       const dataBuffer = Buffer.from(JSON.stringify(canonicalData), 'utf-8');
-      const pubKeyDer = Buffer.from(verdict.arbitratorPublicKey, 'hex');
+      const pubKeyDer = Buffer.from(trustedPublicKeyHex, 'hex');
       const publicKey = crypto.createPublicKey({
         key: pubKeyDer,
         type: 'spki',
