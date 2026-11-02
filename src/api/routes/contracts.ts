@@ -23,7 +23,6 @@ export function registerContractRoutes(
   app.post('/api/v1/arbitrator/verify', async (request, reply) => {
     const schema = z.object({
       verdict: z.any(),
-      trustedPublicKeyHex: z.string().optional(),
     });
     const parsed = schema.safeParse(request.body);
     if (!parsed.success) {
@@ -33,8 +32,10 @@ export function registerContractRoutes(
       });
     }
 
-    const { verdict, trustedPublicKeyHex } = parsed.data;
-    const trustedKey = trustedPublicKeyHex || arbitrator.getPublicKey();
+    // Always pin verification to the server's configured arbitrator key.
+    // Never accept a caller-supplied key, or the endpoint becomes self-certifying.
+    const { verdict } = parsed.data;
+    const trustedKey = arbitrator.getPublicKey();
 
     if (!verdict || typeof verdict !== 'object' || !verdict.signedVerdictSignature) {
       return reply.send({
