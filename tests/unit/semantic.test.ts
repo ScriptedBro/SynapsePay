@@ -91,4 +91,36 @@ The system maintains cryptographic integrity across audit trails and encapsulate
     expect(result.message).toContain('Prompt injection attempt detected');
     expect(result.details).toHaveProperty('injectionBlocked', true);
   });
+
+  it('fails closed when AI provider throws an exception (P1 Fix 11)', async () => {
+    // Instantiate with dummy key so it attempts AI evaluation
+    const liveEvaluator = new SemanticEvaluator('sk-dummy-test-key', 'non-existent-model');
+
+    const rubric: SemanticRubricSpec = {
+      id: 'rubric_ai',
+      name: 'AI Code Analysis',
+      description: 'Audit deliverable using model',
+      weight: 1,
+      minScore: 80,
+      instructions: 'Analyze code quality.',
+    };
+
+    const artifact: DeliverableArtifact = {
+      name: 'test.py',
+      type: 'CODE',
+      content: 'def add(a, b): return a + b',
+    };
+
+    const result = await liveEvaluator.evaluateSingle(
+      rubric,
+      'Test Task',
+      'Test Description',
+      [artifact]
+    );
+
+    // Must fail closed with score 0 — never approve work on AI error!
+    expect(result.passed).toBe(false);
+    expect(result.score).toBe(0);
+    expect(result.details).toHaveProperty('failedClosed', true);
+  });
 });

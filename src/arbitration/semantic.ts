@@ -142,7 +142,16 @@ Evaluate the deliverables against this rubric. Provide:
           details: { keyFindings: object.keyFindings },
         };
       } catch (err: any) {
-        return this.heuristicFallback(rubric, taskTitle, artifacts, `AI provider error: ${err.message}`);
+        // P1 Fix 11: Fail closed on LLM failure. Never silently approve work on AI error!
+        return {
+          checkId: rubric.id,
+          name: rubric.name,
+          passed: false,
+          score: 0,
+          weight: rubric.weight ?? 1,
+          message: `Arbitration error: LLM evaluation failed (${err.message}). Evaluator failed closed to protect funds.`,
+          details: { error: err.message, failedClosed: true },
+        };
       }
     }
 

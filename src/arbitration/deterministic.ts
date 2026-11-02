@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import vm from 'node:vm';
 import { DeterministicCheckSpec, DeliverableArtifact } from '../types/contract.js';
 import { CheckResult } from '../types/arbitration.js';
 
@@ -53,7 +54,7 @@ export class DeterministicEvaluator {
       }
 
       case 'SYNTAX_VALID': {
-        // Validates JSON or JS/TS/Python structure without pre-knowing deliverable hash
+        // P1 Fix 10: Real syntax validation using V8 bytecode compilation & JSON parser without executing untrusted code
         try {
           if (targetArtifact.type === 'DATASET' || targetArtifact.name.endsWith('.json')) {
             JSON.parse(targetArtifact.content);
@@ -63,24 +64,24 @@ export class DeterministicEvaluator {
               passed: true,
               score: 100,
               weight: spec.weight ?? 1,
-              message: 'Valid JSON syntax confirmed.',
+              message: 'Valid JSON syntax confirmed via parser.',
             };
           }
 
-          // For code artifacts, verify structural balance (braces, brackets, parens)
-          const balanced = this.isBracesBalanced(targetArtifact.content);
-          const hasContent = targetArtifact.content.trim().length > 20;
-          const passed = balanced && hasContent;
+          // For JavaScript / TypeScript deliverables, compile syntax into V8 AST
+          const strippedModule = targetArtifact.content
+            .replace(/^import\s+.*?['"].*?['"];?/gm, '')
+            .replace(/^export\s+(default\s+)?/gm, '');
+
+          new vm.Script(strippedModule, { filename: targetArtifact.name });
 
           return {
             checkId: spec.id,
             name: spec.name,
-            passed,
-            score: passed ? 100 : 25,
+            passed: true,
+            score: 100,
             weight: spec.weight ?? 1,
-            message: passed
-              ? 'Code syntax and balanced block structure verified.'
-              : 'Syntax validation failed: Unbalanced braces/parentheses or empty block.',
+            message: 'AST syntax verified without runtime execution.',
           };
         } catch (err: any) {
           return {
@@ -89,57 +90,31 @@ export class DeterministicEvaluator {
             passed: false,
             score: 0,
             weight: spec.weight ?? 1,
-            message: `Syntax validation error: ${err.message}`,
+            message: `Syntax validation failed: ${err.message}`,
+            details: { syntaxError: err.message },
           };
         }
       }
 
       case 'JSON_SCHEMA': {
+        // P1 Fix 10: Real recursive JSON Schema & type conformance validator
         try {
           const parsed = JSON.parse(targetArtifact.content);
-          if (typeof spec.expectedValue === 'object' && spec.expectedValue !== null) {
-            const schemaEntries = Object.entries(spec.expectedValue);
-            let matchedFields = 0;
-            const issues: string[] = [];
+          const validationIssues = this.validateJsonSchemaRecursive(parsed, spec.expectedValue, '$');
 
-            for (const [key, expectedType] of schemaEntries) {
-              if (!(key in parsed)) {
-                issues.push(`Missing property '${key}'`);
-              } else if (typeof expectedType === 'string') {
-                const actualType = Array.isArray(parsed[key]) ? 'array' : typeof parsed[key];
-                if (actualType !== expectedType) {
-                  issues.push(`Property '${key}' expected type '${expectedType}', got '${actualType}'`);
-                } else {
-                  matchedFields++;
-                }
-              } else {
-                matchedFields++;
-              }
-            }
-
-            const passed = issues.length === 0;
-            const score = schemaEntries.length > 0 ? Math.round((matchedFields / schemaEntries.length) * 100) : 100;
-
-            return {
-              checkId: spec.id,
-              name: spec.name,
-              passed,
-              score,
-              weight: spec.weight ?? 1,
-              message: passed
-                ? 'JSON structure conforms to expected schema and types.'
-                : `JSON schema issues: ${issues.join('; ')}`,
-              details: { issues, matchedFields, totalFields: schemaEntries.length },
-            };
-          }
+          const passed = validationIssues.length === 0;
+          const score = passed ? 100 : Math.max(0, 100 - validationIssues.length * 25);
 
           return {
             checkId: spec.id,
             name: spec.name,
-            passed: true,
-            score: 100,
+            passed,
+            score,
             weight: spec.weight ?? 1,
-            message: 'Valid JSON payload syntax verified.',
+            message: passed
+              ? 'JSON deliverable conforms strictly to expected schema hierarchy and types.'
+              : `JSON schema issues: ${validationIssues.join('; ')}`,
+            details: { issues: validationIssues, passed },
           };
         } catch (err: any) {
           return {
@@ -165,8 +140,8 @@ export class DeterministicEvaluator {
             score: passed ? 100 : 0,
             weight: spec.weight ?? 1,
             message: passed
-              ? `Content satisfied regex pattern: ${spec.expectedValue}`
-              : `Content failed to match regex pattern: ${spec.expectedValue}`,
+              ? `Matched required regex pattern: ${spec.expectedValue}`
+              : `Failed to match pattern: ${spec.expectedValue}`,
           };
         } catch (err: any) {
           return {
@@ -181,18 +156,19 @@ export class DeterministicEvaluator {
       }
 
       case 'NUMERIC_THRESHOLD': {
-        const metadataVal = targetArtifact.metadata[spec.targetField];
-        const numVal = typeof metadataVal === 'number' ? metadataVal : parseFloat(targetArtifact.content);
-        const threshold = Number(spec.expectedValue);
+        const fieldName = spec.targetField;
+        const rawVal = targetArtifact.metadata?.[fieldName] ?? targetArtifact.content;
+        const numVal = parseFloat(String(rawVal));
+        const threshold = parseFloat(String(spec.expectedValue));
 
-        if (isNaN(numVal) || isNaN(threshold)) {
+        if (isNaN(numVal)) {
           return {
             checkId: spec.id,
             name: spec.name,
             passed: false,
             score: 0,
             weight: spec.weight ?? 1,
-            message: `Value '${numVal}' or threshold '${threshold}' is not numeric.`,
+            message: `Field '${fieldName}' did not resolve to a valid number. Got: '${rawVal}'`,
           };
         }
 
@@ -201,41 +177,87 @@ export class DeterministicEvaluator {
           checkId: spec.id,
           name: spec.name,
           passed,
-          score: passed ? 100 : Math.max(0, Math.round((numVal / threshold) * 100)),
+          score: passed ? 100 : 0,
           weight: spec.weight ?? 1,
           message: passed
-            ? `Threshold satisfied: ${numVal} >= ${threshold}`
-            : `Threshold breached: ${numVal} < ${threshold}`,
+            ? `Metric '${fieldName}' (${numVal}) meets threshold >= ${threshold}`
+            : `Metric '${fieldName}' (${numVal}) fell below threshold ${threshold}`,
           details: { actual: numVal, threshold },
         };
       }
 
       case 'CUSTOM_ASSERTION':
       default: {
-        const nonWhitespaceLen = targetArtifact.content.trim().length;
-        const passed = nonWhitespaceLen >= 10;
+        const passed = targetArtifact.content.trim().length > 0;
         return {
           checkId: spec.id,
           name: spec.name,
           passed,
           score: passed ? 100 : 0,
           weight: spec.weight ?? 1,
-          message: passed ? 'Substantial deliverable payload confirmed.' : 'Deliverable is empty or whitespace only.',
+          message: passed
+            ? 'Artifact content presence assertion satisfied.'
+            : 'Deliverable artifact is empty.',
         };
       }
     }
   }
 
-  private static isBracesBalanced(str: string): boolean {
-    const stack: string[] = [];
-    const pairs: Record<string, string> = { '}': '{', ')': '(', ']': '[' };
-    for (const char of str) {
-      if (char === '{' || char === '(' || char === '[') {
-        stack.push(char);
-      } else if (char === '}' || char === ')' || char === ']') {
-        if (stack.pop() !== pairs[char]) return false;
+  /**
+   * Recursive validator supporting standard schemas and nested property dictionaries
+   */
+  private static validateJsonSchemaRecursive(
+    data: any,
+    schema: any,
+    path: string
+  ): string[] {
+    const issues: string[] = [];
+
+    if (schema === null || typeof schema !== 'object') {
+      return issues;
+    }
+
+    // Standard JSON Schema format with properties / required
+    if (schema.type === 'object' && schema.properties) {
+      if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+        issues.push(`${path} expected object, got ${Array.isArray(data) ? 'array' : typeof data}`);
+        return issues;
+      }
+
+      if (Array.isArray(schema.required)) {
+        for (const reqKey of schema.required) {
+          if (!(reqKey in data)) {
+            issues.push(`${path}.${reqKey} is required but missing`);
+          }
+        }
+      }
+
+      for (const [propName, propSchema] of Object.entries(schema.properties)) {
+        if (propName in data) {
+          issues.push(...this.validateJsonSchemaRecursive(data[propName], propSchema, `${path}.${propName}`));
+        }
+      }
+      return issues;
+    }
+
+    // Key-value type map format { name: 'string', age: 'number', config: { ... } }
+    for (const [key, expected] of Object.entries(schema)) {
+      if (!(key in data)) {
+        issues.push(`${path}.${key} is missing`);
+        continue;
+      }
+
+      const val = data[key];
+      if (typeof expected === 'string') {
+        const actualType = Array.isArray(val) ? 'array' : typeof val;
+        if (actualType !== expected) {
+          issues.push(`${path}.${key} expected type '${expected}', got '${actualType}'`);
+        }
+      } else if (typeof expected === 'object' && expected !== null) {
+        issues.push(...this.validateJsonSchemaRecursive(val, expected, `${path}.${key}`));
       }
     }
-    return stack.length === 0;
+
+    return issues;
   }
 }

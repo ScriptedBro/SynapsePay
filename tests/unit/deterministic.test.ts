@@ -159,4 +159,83 @@ describe('DeterministicEvaluator', () => {
     expect(failRes.passed).toBe(false);
     expect(failRes.score).toBe(0);
   });
+
+  it('validates JavaScript/TypeScript syntax via V8 bytecode compilation (P1 Fix 10)', () => {
+    const validJsArtifact: DeliverableArtifact = {
+      name: 'service.ts',
+      type: 'CODE',
+      content: 'export function calculateTotal(items) { return items.reduce((a, b) => a + b, 0); }',
+    };
+
+    const syntaxSpec: DeterministicCheckSpec = {
+      id: 'chk_v8_syntax',
+      name: 'V8 Syntax Check',
+      type: 'SYNTAX_VALID',
+      targetField: 'service.ts',
+      required: true,
+    };
+
+    const resValid = DeterministicEvaluator.evaluateSingle(syntaxSpec, [validJsArtifact]);
+    expect(resValid.passed).toBe(true);
+    expect(resValid.score).toBe(100);
+
+    const brokenJsArtifact: DeliverableArtifact = {
+      name: 'service.ts',
+      type: 'CODE',
+      content: 'function broken(a, b { return a +; }', // Missing closing paren & bad expression
+    };
+
+    const resBroken = DeterministicEvaluator.evaluateSingle(syntaxSpec, [brokenJsArtifact]);
+    expect(resBroken.passed).toBe(false);
+    expect(resBroken.score).toBe(0);
+    expect(resBroken.details).toHaveProperty('syntaxError');
+  });
+
+  it('validates nested recursive JSON schemas (P1 Fix 10)', () => {
+    const validNestedArtifact: DeliverableArtifact = {
+      name: 'metrics.json',
+      type: 'DATASET',
+      content: JSON.stringify({
+        cluster: 'us-west-2',
+        telemetry: {
+          uptimeSeconds: 84000,
+          nodes: ['node-1', 'node-2'],
+        },
+      }),
+    };
+
+    const nestedSchemaSpec: DeterministicCheckSpec = {
+      id: 'chk_nested_schema',
+      name: 'Nested Telemetry Schema',
+      type: 'JSON_SCHEMA',
+      targetField: 'metrics.json',
+      expectedValue: {
+        cluster: 'string',
+        telemetry: {
+          uptimeSeconds: 'number',
+          nodes: 'array',
+        },
+      },
+      required: true,
+    };
+
+    const res = DeterministicEvaluator.evaluateSingle(nestedSchemaSpec, [validNestedArtifact]);
+    expect(res.passed).toBe(true);
+    expect(res.score).toBe(100);
+
+    const invalidNestedArtifact: DeliverableArtifact = {
+      name: 'metrics.json',
+      type: 'DATASET',
+      content: JSON.stringify({
+        cluster: 'us-west-2',
+        telemetry: {
+          uptimeSeconds: 'not-a-number', // Type mismatch in nested field!
+        },
+      }),
+    };
+
+    const resInvalid = DeterministicEvaluator.evaluateSingle(nestedSchemaSpec, [invalidNestedArtifact]);
+    expect(resInvalid.passed).toBe(false);
+    expect(resInvalid.details.issues.length).toBeGreaterThan(0);
+  });
 });
