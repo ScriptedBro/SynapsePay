@@ -202,11 +202,14 @@ pnpm run test:coverage
 
 All requests to `/api/v1/contracts` require authentication via `Authorization: Bearer <API_KEY>` or `x-api-key: <API_KEY>`.
 
-### 1. Health & Status
+### 1. Health & Public Endpoints
 * `GET /health` — Health check endpoint (Returns 200 `{"status": "UP"}`)
 * `GET /api/v1/info` — Protocol information and runtime mode
+* `GET /api/v1/arbitrator/public-key` — Persistent Ed25519 public key and SHA-256 fingerprint for independent verification
+* `GET /api/v1/agents/:id/reputation` — Verifiable agent performance history, dispute rate, and signed attestation
+* `GET /api/v1/contracts/:id/checkpoint` — Signed audit ledger root hash checkpoint
 
-### 2. Create Contract & Initiate Escrow
+### 2. Create Contract & Initiate Verified Conditional Settlement
 * `POST /api/v1/contracts`
 ```json
 {
@@ -217,7 +220,7 @@ All requests to `/api/v1/contracts` require authentication via `Authorization: B
     "name": "ProcurementAgent",
     "paypalAccount": "buyer@sandbox.paypal.com"
   },
-  "totalAmount": 100.00,
+  "totalAmountInCents": 10000,
   "currency": "USD",
   "sla": {
     "slaId": "323e4567-e89b-12d3-a456-426614174002",
@@ -226,6 +229,7 @@ All requests to `/api/v1/contracts` require authentication via `Authorization: B
     "maxDeliverySeconds": 86400,
     "maxArbitrationRetries": 2,
     "minOverallScore": 85,
+    "partialReleaseThreshold": 60,
     "deterministicChecks": [
       {
         "id": "check_hash",
@@ -233,6 +237,7 @@ All requests to `/api/v1/contracts` require authentication via `Authorization: B
         "type": "HASH_EQUAL",
         "targetField": "icon.ts",
         "expectedValue": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "weight": 2,
         "required": true
       }
     ],
@@ -241,6 +246,7 @@ All requests to `/api/v1/contracts` require authentication via `Authorization: B
         "id": "rubric_quality",
         "name": "Code Architecture & Types",
         "description": "Clean modular structure with TypeScript definitions",
+        "weight": 2,
         "minScore": 80,
         "instructions": "Inspect imports, types, error guards, and documentation."
       }
@@ -250,8 +256,7 @@ All requests to `/api/v1/contracts` require authentication via `Authorization: B
     {
       "sequence": 1,
       "name": "Phase 1 Delivery",
-      "percentage": 100,
-      "amount": 100.00,
+      "amountInCents": 10000,
       "currency": "USD",
       "status": "PENDING"
     }
@@ -262,10 +267,15 @@ All requests to `/api/v1/contracts` require authentication via `Authorization: B
 }
 ```
 
-### 3. Worker Accepts Contract
+### 3. Contract Negotiation (Bilateral Counter-Offers)
+* `POST /api/v1/contracts/:id/negotiate` — Submit proposed terms (counter-offer)
+* `GET /api/v1/contracts/:id/proposals` — List open and resolved proposals
+* `POST /api/v1/contracts/:id/negotiate/:proposalId/accept` — Counterparty accepts terms
+
+### 4. Worker Accepts Contract
 * `POST /api/v1/contracts/:id/accept`
 
-### 4. Submit Deliverables & Trigger Arbitration
+### 5. Submit Deliverables & Trigger Autonomous Arbitration
 * `POST /api/v1/contracts/:id/submit`
 ```json
 {
@@ -277,14 +287,15 @@ All requests to `/api/v1/contracts` require authentication via `Authorization: B
     {
       "name": "icon.ts",
       "type": "CODE",
-      "content": "export function renderIcon() { return '<svg></svg>'; }"
+      "content": "export function renderIcon() { return '<svg></svg>'; }",
+      "metadata": {}
     }
   ]
 }
 ```
 
-### 5. Webhooks Listener
-* `POST /api/v1/webhooks/paypal` — Ingests and cryptographically validates events (`PAYMENT.AUTHORIZATION.CREATED`, `PAYMENT.PAYOUTS-ITEM.SUCCEEDED`, etc.) to trigger state machine updates.
+### 6. Webhooks Listener
+* `POST /api/v1/webhooks/paypal` — Ingests, deduplicates, and cryptographically validates events (`PAYMENT.AUTHORIZATION.CREATED`, `PAYMENT.PAYOUTS-ITEM.SUCCEEDED`, etc.) to drive state machine progression.
 
 ---
 
