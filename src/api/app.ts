@@ -24,7 +24,7 @@ export interface AppDependencies {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-function getConsoleHtml(mode: string, apiKey: string): string {
+function getConsoleHtml(mode: string): string {
   const possiblePaths = [
     path.join(__dirname, 'console.html'),
     path.join(__dirname, '..', 'src', 'api', 'console.html'),
@@ -37,9 +37,10 @@ function getConsoleHtml(mode: string, apiKey: string): string {
       break;
     }
   }
+  // P1 Fix 9: Never inject master admin API key into served DOM!
   return raw
     .replace('{{PAYPAL_MODE}}', mode.toUpperCase())
-    .replace('{{API_KEY}}', apiKey);
+    .replace('{{API_KEY}}', '');
 }
 
 export function buildApp(deps: AppDependencies): FastifyInstance {
@@ -47,8 +48,11 @@ export function buildApp(deps: AppDependencies): FastifyInstance {
     logger: deps.config.NODE_ENV !== 'test',
   });
 
+  // P1 Fix 9: Restrict CORS origin in production
   app.register(cors, {
-    origin: true,
+    origin: deps.config.NODE_ENV === 'production'
+      ? [deps.config.BASE_URL]
+      : true,
   });
 
   app.setErrorHandler(errorHandler);
@@ -70,7 +74,7 @@ export function buildApp(deps: AppDependencies): FastifyInstance {
       };
     }
 
-    const html = getConsoleHtml(deps.config.PAYPAL_MODE, deps.config.API_KEY);
+    const html = getConsoleHtml(deps.config.PAYPAL_MODE);
     return reply.type('text/html').send(html);
   });
 

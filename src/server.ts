@@ -29,10 +29,24 @@ async function bootstrap() {
     payoutsManager,
     arbitrator,
     hmacSecret: config.AUDIT_HMAC_SECRET,
+    maxEscrowAmountInCents: config.MAX_ESCROW_AMOUNT_USD * 100,
+    dailyAgentLimitInCents: 2000000, // $20,000.00 daily spend cap per buyer
   });
 
   // Seed rich initial state so judges/users experience a living product, not empty zeroes
   contractManager.seedSampleContracts();
+
+  // P1 Fix 12: Automated background scheduler for contract expiry sweeping
+  const sweepInterval = setInterval(async () => {
+    try {
+      const res = await contractManager.sweepExpiredContracts();
+      if (res.expiredCount > 0) {
+        console.log(`[SynapsePay Sweeper] Swept and voided ${res.expiredCount} expired contracts.`);
+      }
+    } catch (err: any) {
+      console.error('[SynapsePay Sweeper] Error sweeping expired contracts:', err.message);
+    }
+  }, 60_000);
 
   const app = buildApp({
     config,
@@ -55,6 +69,7 @@ async function bootstrap() {
   for (const sig of signals) {
     process.on(sig, async () => {
       console.log(`[SynapsePay] Received ${sig}, gracefully shutting down...`);
+      clearInterval(sweepInterval);
       await app.close();
       process.exit(0);
     });
