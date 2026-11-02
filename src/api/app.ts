@@ -12,9 +12,12 @@ import { registerContractRoutes } from './routes/contracts.js';
 import { registerSubmissionRoutes } from './routes/submissions.js';
 import { registerWebhookRoutes } from './routes/webhooks.js';
 
+import { SynapseArbitrator } from '../arbitration/arbitrator.js';
+
 export interface AppDependencies {
   config: Config;
   contractManager: ContractManager;
+  arbitrator: SynapseArbitrator;
   webhookGuard: PayPalWebhookGuard;
 }
 
@@ -81,7 +84,7 @@ export function buildApp(deps: AppDependencies): FastifyInstance {
   }));
 
   // Route registration
-  registerContractRoutes(app, deps.contractManager);
+  registerContractRoutes(app, deps.contractManager, deps.arbitrator);
   registerSubmissionRoutes(app, deps.contractManager);
   registerWebhookRoutes(app, deps.contractManager, deps.webhookGuard);
 

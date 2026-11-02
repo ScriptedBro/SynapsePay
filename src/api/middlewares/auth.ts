@@ -2,11 +2,12 @@ import { FastifyRequest, FastifyReply } from 'fastify';
 
 export function createAuthGuard(apiKey: string) {
   return async function authGuard(request: FastifyRequest, reply: FastifyReply) {
-    // Webhooks have their own cryptographic signature verification; public health, info, and root portal are open
+    // Webhooks have their own cryptographic signature verification; public health, info, public-key and root portal are open
     if (
       request.url.startsWith('/api/v1/webhooks/paypal') ||
       request.url === '/health' ||
       request.url === '/api/v1/info' ||
+      request.url === '/api/v1/arbitrator/public-key' ||
       request.url === '/'
     ) {
       return;
