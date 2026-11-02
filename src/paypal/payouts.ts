@@ -14,17 +14,18 @@ export class PayPalPayoutsManager {
     contractId: string;
     milestoneSequence: number;
     recipientEmail: string;
-    amount: number;
+    amountInCents: number;
     currency: string;
     note?: string;
   }): Promise<PayoutExecutionResult> {
+    const value = (params.amountInCents / 100).toFixed(2);
     const senderBatchId = `synapse_${params.contractId.replace(/-/g, '')}_m${params.milestoneSequence}`;
     const senderItemId = `item_${params.contractId.replace(/-/g, '')}_m${params.milestoneSequence}`;
 
     const payload: PayPalPayoutBatchRequest = PayPalPayoutBatchRequestSchema.parse({
       sender_batch_header: {
         sender_batch_id: senderBatchId,
-        email_subject: 'SynapsePay Autonomous Settlement: Milestone Approved',
+        email_subject: 'SynapsePay Verified Settlement: Milestone Approved',
         email_message:
           params.note ??
           `Settlement funds for milestone ${params.milestoneSequence} of contract ${params.contractId} have been disbursed by SynapsePay.`,
@@ -33,11 +34,11 @@ export class PayPalPayoutsManager {
         {
           recipient_type: 'EMAIL',
           amount: {
-            value: params.amount.toFixed(2),
+            value,
             currency: params.currency,
           },
           receiver: params.recipientEmail,
-          note: `Autonomous verified payout for contract ${params.contractId}`,
+          note: `Autonomous verified settlement for contract ${params.contractId}`,
           sender_item_id: senderItemId,
         },
       ],

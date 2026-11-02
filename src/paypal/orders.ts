@@ -12,30 +12,39 @@ export interface CaptureResult {
   amount: { value: string; currency_code: string };
 }
 
+export interface RefundResult {
+  refundId: string;
+  status: string;
+  amount: { value: string; currency_code: string };
+}
+
 export class PayPalOrdersManager {
   constructor(private readonly client: PayPalClient) {}
 
   public async createAuthorizationOrder(params: {
     contractId: string;
-    amount: number;
+    amountInCents: number;
     currency: string;
     returnUrl?: string;
     cancelUrl?: string;
   }): Promise<CreateOrderResult> {
+    const value = (params.amountInCents / 100).toFixed(2);
+
     const payload = {
       intent: 'AUTHORIZE',
       purchase_units: [
         {
           reference_id: params.contractId,
+          custom_id: params.contractId, // Authoritative index for Webhook mapping
           description: `SynapsePay Escrow Hold for Contract ${params.contractId}`,
           amount: {
             currency_code: params.currency,
-            value: params.amount.toFixed(2),
+            value,
           },
         },
       ],
       application_context: {
-        brand_name: 'SynapsePay Autonomous Escrow',
+        brand_name: 'SynapsePay Autonomous Settlement',
         landing_page: 'NO_PREFERENCE',
         user_action: 'CONTINUE',
         return_url: params.returnUrl ?? 'https://synapsepay.protocol/escrow/approved',
@@ -84,15 +93,18 @@ export class PayPalOrdersManager {
 
   public async captureAuthorization(
     authorizationId: string,
-    amount: number,
-    currency: string
+    amountInCents: number,
+    currency: string,
+    isFinalCapture: boolean = true
   ): Promise<CaptureResult> {
+    const value = (amountInCents / 100).toFixed(2);
+
     const payload = {
       amount: {
-        value: amount.toFixed(2),
+        value,
         currency_code: currency,
       },
-      is_final_capture: true,
+      is_final_capture: isFinalCapture,
     };
 
     const data = await this.client.request<any>(
@@ -108,6 +120,41 @@ export class PayPalOrdersManager {
 
     return {
       captureId: data.id,
+      status: data.status,
+      amount: data.amount,
+    };
+  }
+
+  public async refundCapture(
+    captureId: string,
+    amountInCents?: number,
+    currency?: string,
+    note?: string
+  ): Promise<RefundResult> {
+    const payload: any = {};
+    if (amountInCents !== undefined && currency) {
+      payload.amount = {
+        value: (amountInCents / 100).toFixed(2),
+        currency_code: currency,
+      };
+    }
+    if (note) {
+      payload.note_to_payer = note;
+    }
+
+    const data = await this.client.request<any>(
+      `/v2/payments/captures/${captureId}/refund`,
+      {
+        method: 'POST',
+        body: Object.keys(payload).length > 0 ? payload : undefined,
+        headers: {
+          'PayPal-Request-Id': `ref_${captureId}_${Date.now()}`,
+        },
+      }
+    );
+
+    return {
+      refundId: data.id,
       status: data.status,
       amount: data.amount,
     };

@@ -6,6 +6,7 @@ export const PayPalOrderRequestSchema = z.object({
     z.object({
       reference_id: z.string(),
       description: z.string().optional(),
+      custom_id: z.string().optional(), // Maps directly to contractId
       amount: z.object({
         currency_code: z.string(),
         value: z.string(),
@@ -24,6 +25,28 @@ export const PayPalOrderRequestSchema = z.object({
 });
 
 export type PayPalOrderRequest = z.infer<typeof PayPalOrderRequestSchema>;
+
+export const PayPalCaptureRequestSchema = z.object({
+  amount: z.object({
+    value: z.string(),
+    currency_code: z.string(),
+  }),
+  is_final_capture: z.boolean().default(true),
+});
+
+export type PayPalCaptureRequest = z.infer<typeof PayPalCaptureRequestSchema>;
+
+export const PayPalRefundRequestSchema = z.object({
+  amount: z
+    .object({
+      value: z.string(),
+      currency_code: z.string(),
+    })
+    .optional(),
+  note_to_payer: z.string().optional(),
+});
+
+export type PayPalRefundRequest = z.infer<typeof PayPalRefundRequestSchema>;
 
 export const PayPalPayoutItemSchema = z.object({
   recipient_type: z.enum(['EMAIL', 'PHONE', 'PAYPAL_ID']).default('EMAIL'),
