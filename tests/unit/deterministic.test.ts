@@ -127,4 +127,36 @@ describe('DeterministicEvaluator', () => {
     const failRes = DeterministicEvaluator.evaluateSingle(failSpec, [artifact]);
     expect(failRes.passed).toBe(false);
   });
+
+  it('validates syntax for generative work via SYNTAX_VALID check (Claim 10)', () => {
+    const validJsonArtifact: DeliverableArtifact = {
+      name: 'output.json',
+      type: 'DATASET',
+      content: '{"model": "gpt-4o", "confidence": 0.98, "tokens": 450}',
+    };
+
+    const syntaxSpec: DeterministicCheckSpec = {
+      id: 'check_syntax_1',
+      name: 'Valid JSON Syntax',
+      type: 'SYNTAX_VALID',
+      targetField: 'output.json',
+      required: true,
+      weight: 2,
+    };
+
+    const res = DeterministicEvaluator.evaluateSingle(syntaxSpec, [validJsonArtifact]);
+    expect(res.passed).toBe(true);
+    expect(res.score).toBe(100);
+    expect(res.weight).toBe(2);
+
+    const brokenJsonArtifact: DeliverableArtifact = {
+      name: 'broken.json',
+      type: 'DATASET',
+      content: '{"model": "gpt-4o", incomplete json',
+    };
+
+    const failRes = DeterministicEvaluator.evaluateSingle(syntaxSpec, [brokenJsonArtifact]);
+    expect(failRes.passed).toBe(false);
+    expect(failRes.score).toBe(0);
+  });
 });

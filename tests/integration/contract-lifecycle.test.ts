@@ -21,7 +21,6 @@ describe('Contract Lifecycle Integration', () => {
     const ordersManager = new PayPalOrdersManager(mockClient);
     const payoutsManager = new PayPalPayoutsManager(mockClient);
 
-    // Mock PayPal network boundaries for pure integration testing
     vi.spyOn(ordersManager, 'createAuthorizationOrder').mockResolvedValue({
       orderId: 'ORD_TEST_MOCK_123',
       status: 'CREATED',
@@ -35,6 +34,11 @@ describe('Contract Lifecycle Integration', () => {
     });
 
     vi.spyOn(ordersManager, 'voidAuthorization').mockResolvedValue(true);
+    vi.spyOn(ordersManager, 'refundCapture').mockResolvedValue({
+      refundId: 'REF_TEST_123',
+      status: 'COMPLETED',
+      amount: { value: '100.00', currency_code: 'USD' },
+    });
 
     vi.spyOn(payoutsManager, 'executeMilestonePayout').mockResolvedValue({
       payoutBatchId: 'BATCH_TEST_789',
@@ -51,18 +55,24 @@ describe('Contract Lifecycle Integration', () => {
       hmacSecret: secret,
     });
 
-    return { manager, ordersManager, payoutsManager };
+    return { manager, ordersManager, payoutsManager, arbitrator };
   }
 
-  const sampleContract: ContractSpec = {
-    id: '123e4567-e89b-12d3-a456-426614174000',
+  const sampleWorker: Participant = {
+    id: '423e4567-e89b-12d3-a456-426614174003',
+    role: 'WORKER',
+    name: 'DevAgent-Alpha',
+    paypalAccount: 'devagent@developer.org',
+  };
+
+  const sampleContractInput: Omit<ContractSpec, 'id' | 'createdAt' | 'metadata'> = {
     buyer: {
       id: '223e4567-e89b-12d3-a456-426614174001',
       role: 'BUYER',
       name: 'Autonomous ProcureBot',
       paypalAccount: 'buyer@corp.com',
     },
-    totalAmount: 100,
+    totalAmountInCents: 10000, // $100.00
     currency: 'USD',
     sla: {
       slaId: '323e4567-e89b-12d3-a456-426614174002',
@@ -78,6 +88,7 @@ describe('Contract Lifecycle Integration', () => {
           type: 'HASH_EQUAL',
           targetField: 'icon-generator.ts',
           expectedValue: '', // dynamically filled
+          weight: 1,
           required: true,
         },
       ],
@@ -96,22 +107,12 @@ describe('Contract Lifecycle Integration', () => {
       {
         sequence: 1,
         name: 'Full Deliverable Release',
-        percentage: 100,
-        amount: 100,
+        amountInCents: 10000,
         currency: 'USD',
         status: 'PENDING',
       },
     ],
-    createdAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 86400000).toISOString(),
-    metadata: {},
-  };
-
-  const sampleWorker: Participant = {
-    id: '423e4567-e89b-12d3-a456-426614174003',
-    role: 'WORKER',
-    name: 'DevAgent-Alpha',
-    paypalAccount: 'devagent@developer.org',
   };
 
   it('completes the full happy path: draft -> lock -> accept -> submit -> arbitration -> payout', async () => {
@@ -121,12 +122,12 @@ describe('Contract Lifecycle Integration', () => {
     const codeHash = crypto.createHash('sha256').update(codeContent).digest('hex');
 
     const contractWithHash = {
-      ...sampleContract,
+      ...sampleContractInput,
       sla: {
-        ...sampleContract.sla,
+        ...sampleContractInput.sla,
         deterministicChecks: [
           {
-            ...sampleContract.sla.deterministicChecks[0]!,
+            ...sampleContractInput.sla.deterministicChecks[0]!,
             expectedValue: codeHash,
           },
         ],
@@ -169,12 +170,12 @@ describe('Contract Lifecycle Integration', () => {
     expect(verdict.decision).toBe('RELEASE');
     expect(verdict.payoutPercentage).toBe(1.0);
     expect(settledEscrow.state).toBe(EscrowState.SETTLED);
-    expect(settledEscrow.disbursedAmount).toBe(100);
+    expect(settledEscrow.disbursedAmountInCents).toBe(10000);
     expect(payoutsManager.executeMilestonePayout).toHaveBeenCalledWith(
       expect.objectContaining({
         contractId: contract.id,
         recipientEmail: 'devagent@developer.org',
-        amount: 100,
+        amountInCents: 10000,
       })
     );
 
@@ -182,6 +183,176 @@ describe('Contract Lifecycle Integration', () => {
     const finalContract = manager.getContract(contract.id);
     expect(finalContract.auditIntegrity.valid).toBe(true);
     expect(finalContract.escrow.auditTrail.length).toBeGreaterThanOrEqual(5);
+
+    // 6. Verify verdict signature with Ed25519 offline verification (Claim 8)
+    const isSignatureValid = SynapseArbitrator.verifyVerdictSignature(verdict);
+    expect(isSignatureValid).toBe(true);
+  });
+
+  it('runs multi-milestone progression correctly without premature settlement (Claim 1)', async () => {
+    const { manager, ordersManager } = createTestSetup();
+
+    const multiMilestoneSpec = {
+      ...sampleContractInput,
+      totalAmountInCents: 20000, // $200.00 total across 2 milestones
+      sla: {
+        ...sampleContractInput.sla,
+        deterministicChecks: [
+          {
+            id: 'chk_regex',
+            name: 'Regex Match',
+            type: 'REGEX_MATCH' as const,
+            targetField: 'artifact.ts',
+            expectedValue: '^export function',
+            weight: 1,
+            required: true,
+          },
+        ],
+      },
+      milestones: [
+        {
+          sequence: 1,
+          name: 'Phase 1: Architecture Core',
+          amountInCents: 10000,
+          currency: 'USD',
+          status: 'PENDING' as const,
+        },
+        {
+          sequence: 2,
+          name: 'Phase 2: Final Implementation',
+          amountInCents: 10000,
+          currency: 'USD',
+          status: 'PENDING' as const,
+        },
+      ],
+    };
+
+    const { contract } = await manager.createContract(multiMilestoneSpec);
+    manager.confirmEscrowLock(contract.id, 'AUTH_MULTI_777');
+    manager.acceptContract(contract.id, sampleWorker);
+
+    // Milestone 1 submission
+    const subM1: SubmissionPayload = {
+      contractId: contract.id,
+      workerId: sampleWorker.id,
+      milestoneSequence: 1,
+      submittedAt: new Date().toISOString(),
+      artifacts: [
+        {
+          name: 'artifact.ts',
+          type: 'CODE',
+          content: 'export function phase1() { return "core"; }',
+        },
+      ],
+    };
+
+    const resultM1 = await manager.submitDeliverable(subM1);
+    expect(resultM1.verdict.decision).toBe('RELEASE');
+    // Escrow must NOT be settled yet; must advance activeMilestone to 2 and remain IN_PROGRESS
+    expect(resultM1.escrow.state).toBe(EscrowState.IN_PROGRESS);
+    expect(resultM1.escrow.activeMilestone).toBe(2);
+    expect(resultM1.escrow.disbursedAmountInCents).toBe(10000);
+    // Verified capture was not final capture
+    expect(ordersManager.captureAuthorization).toHaveBeenCalledWith(
+      'AUTH_MULTI_777',
+      10000,
+      'USD',
+      false // isFinalCapture is FALSE for non-final milestone
+    );
+
+    // Milestone 2 submission
+    const subM2: SubmissionPayload = {
+      contractId: contract.id,
+      workerId: sampleWorker.id,
+      milestoneSequence: 2,
+      submittedAt: new Date().toISOString(),
+      artifacts: [
+        {
+          name: 'artifact.ts',
+          type: 'CODE',
+          content: 'export function phase2() { return "complete"; }',
+        },
+      ],
+    };
+
+    const resultM2 = await manager.submitDeliverable(subM2);
+    expect(resultM2.verdict.decision).toBe('RELEASE');
+    // Now final milestone: escrow MUST transition to SETTLED
+    expect(resultM2.escrow.state).toBe(EscrowState.SETTLED);
+    expect(resultM2.escrow.disbursedAmountInCents).toBe(20000);
+    expect(ordersManager.captureAuthorization).toHaveBeenCalledWith(
+      'AUTH_MULTI_777',
+      10000,
+      'USD',
+      true // isFinalCapture is TRUE for final milestone
+    );
+  });
+
+  it('aborts payout and throws immediately if capture fails (Claim 4)', async () => {
+    const { manager, ordersManager, payoutsManager } = createTestSetup();
+
+    vi.spyOn(ordersManager, 'captureAuthorization').mockRejectedValueOnce(
+      new Error('PAYPAL_HOLD_CAPTURE_FAILED: Insufficient buyer funds')
+    );
+
+    const { contract } = await manager.createContract({
+      ...sampleContractInput,
+      sla: {
+        ...sampleContractInput.sla,
+        deterministicChecks: [],
+        semanticRubrics: [],
+      },
+    });
+
+    manager.confirmEscrowLock(contract.id, 'AUTH_FAIL_001');
+    manager.acceptContract(contract.id, sampleWorker);
+
+    const submission: SubmissionPayload = {
+      contractId: contract.id,
+      workerId: sampleWorker.id,
+      milestoneSequence: 1,
+      submittedAt: new Date().toISOString(),
+      artifacts: [{ name: 'out.txt', type: 'CODE', content: 'test code' }],
+    };
+
+    // Must throw capture failure and NOT disburse payout!
+    await expect(manager.submitDeliverable(submission)).rejects.toThrow(
+      /Critical settlement error: PayPal capture failed/
+    );
+
+    // Ensure payoutsManager was NEVER called
+    expect(payoutsManager.executeMilestonePayout).not.toHaveBeenCalled();
+
+    // Verify contract is NOT settled
+    const status = manager.getContract(contract.id);
+    expect(status.escrow.state).not.toBe(EscrowState.SETTLED);
+    expect(status.escrow.disbursedAmountInCents).toBe(0);
+  });
+
+  it('rejects worker impostor from submitting or accepting (Claim 7)', async () => {
+    const { manager } = createTestSetup();
+
+    const { contract } = await manager.createContract({
+      ...sampleContractInput,
+      sla: { ...sampleContractInput.sla, deterministicChecks: [] },
+    });
+
+    manager.confirmEscrowLock(contract.id, 'AUTH_SEC_111');
+    manager.acceptContract(contract.id, sampleWorker, sampleWorker.id);
+
+    const impostorWorkerId = '999e4567-e89b-12d3-a456-426614174999';
+    const submissionFromImpostor: SubmissionPayload = {
+      contractId: contract.id,
+      workerId: impostorWorkerId,
+      milestoneSequence: 1,
+      submittedAt: new Date().toISOString(),
+      artifacts: [{ name: 'hack.ts', type: 'CODE', content: 'fake work' }],
+    };
+
+    // Submit with impostor id should be rejected
+    await expect(manager.submitDeliverable(submissionFromImpostor, impostorWorkerId)).rejects.toThrow(
+      /Impostor submission rejected|Unauthorized/
+    );
   });
 
   it('triggers remediation on failure and allows successful retry', async () => {
@@ -189,26 +360,25 @@ describe('Contract Lifecycle Integration', () => {
 
     const expectedHash = 'a'.repeat(64);
     const contractWithStrictHash = {
-      ...sampleContract,
-      id: '523e4567-e89b-12d3-a456-426614174005',
+      ...sampleContractInput,
       sla: {
-        ...sampleContract.sla,
+        ...sampleContractInput.sla,
         deterministicChecks: [
           {
-            ...sampleContract.sla.deterministicChecks[0]!,
+            ...sampleContractInput.sla.deterministicChecks[0]!,
             expectedValue: expectedHash,
           },
         ],
       },
     };
 
-    await manager.createContract(contractWithStrictHash);
-    manager.confirmEscrowLock(contractWithStrictHash.id, 'AUTH_MOCK_1');
-    manager.acceptContract(contractWithStrictHash.id, sampleWorker);
+    const { contract } = await manager.createContract(contractWithStrictHash);
+    manager.confirmEscrowLock(contract.id, 'AUTH_MOCK_1');
+    manager.acceptContract(contract.id, sampleWorker);
 
     // Initial flawed submission
     const badSubmission: SubmissionPayload = {
-      contractId: contractWithStrictHash.id,
+      contractId: contract.id,
       workerId: sampleWorker.id,
       milestoneSequence: 1,
       submittedAt: new Date().toISOString(),
@@ -227,11 +397,11 @@ describe('Contract Lifecycle Integration', () => {
     expect(attempt1.escrow.state).toBe(EscrowState.REMEDIATION_REQUIRED);
     expect(attempt1.escrow.retriesUsed).toBe(1);
 
-    // Second submission with zero retries left results in terminal VOID
+    // Second submission with zero retries left results in terminal VOID and refund (Claim 3)
     const attempt2 = await manager.submitDeliverable(badSubmission);
     expect(attempt2.verdict.decision).toBe('REJECT');
     expect(attempt2.verdict.canRetry).toBe(false);
     expect(attempt2.escrow.state).toBe(EscrowState.VOIDED);
-    expect(attempt2.escrow.refundedAmount).toBe(100);
+    expect(attempt2.escrow.refundedAmountInCents).toBe(10000);
   });
 });

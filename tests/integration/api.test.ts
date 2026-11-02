@@ -38,6 +38,11 @@ describe('API Integration via Fastify Inject', () => {
   });
 
   vi.spyOn(ordersManager, 'voidAuthorization').mockResolvedValue(true);
+  vi.spyOn(ordersManager, 'refundCapture').mockResolvedValue({
+    refundId: 'REF_API_789',
+    status: 'COMPLETED',
+    amount: { value: '50.00', currency_code: 'USD' },
+  });
 
   vi.spyOn(payoutsManager, 'executeMilestonePayout').mockResolvedValue({
     payoutBatchId: 'BATCH_API_789',
@@ -55,6 +60,7 @@ describe('API Integration via Fastify Inject', () => {
   const app = buildApp({
     config,
     contractManager,
+    arbitrator,
     webhookGuard,
   });
 
@@ -66,7 +72,7 @@ describe('API Integration via Fastify Inject', () => {
       name: 'Agent Buyer',
       paypalAccount: 'buyer@test.com',
     },
-    totalAmount: 50,
+    totalAmountInCents: 5000, // $50.00
     currency: 'USD',
     sla: {
       slaId: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a13',
@@ -82,8 +88,7 @@ describe('API Integration via Fastify Inject', () => {
       {
         sequence: 1,
         name: 'Milestone 1',
-        percentage: 100,
-        amount: 50,
+        amountInCents: 5000,
         currency: 'USD',
         status: 'PENDING',
       },
@@ -93,7 +98,7 @@ describe('API Integration via Fastify Inject', () => {
     metadata: {},
   };
 
-  it('responds to health and info endpoints without auth', async () => {
+  it('responds to health, info, and arbitrator public key endpoints without auth', async () => {
     const health = await app.inject({ method: 'GET', url: '/health' });
     expect(health.statusCode).toBe(200);
     expect(JSON.parse(health.body).status).toBe('UP');
@@ -101,6 +106,12 @@ describe('API Integration via Fastify Inject', () => {
     const info = await app.inject({ method: 'GET', url: '/api/v1/info' });
     expect(info.statusCode).toBe(200);
     expect(JSON.parse(info.body).protocol).toBe('SynapsePay');
+
+    const pubKey = await app.inject({ method: 'GET', url: '/api/v1/arbitrator/public-key' });
+    expect(pubKey.statusCode).toBe(200);
+    const pubKeyBody = JSON.parse(pubKey.body);
+    expect(pubKeyBody.algorithm).toBe('Ed25519');
+    expect(pubKeyBody.publicKey).toBeDefined();
   });
 
   it('rejects protected routes when API key is missing or wrong', async () => {
@@ -151,12 +162,16 @@ describe('API Integration via Fastify Inject', () => {
     contractManager.confirmEscrowLock(testContractPayload.id, 'AUTH_API_123');
 
     // 3. Worker accepts
+    const workerId = 'b0eebc99-9c0b-4ef8-bb6d-6bb9bd380b22';
     const acceptRes = await app.inject({
       method: 'POST',
       url: `/api/v1/contracts/${testContractPayload.id}/accept`,
-      headers: { 'x-api-key': config.API_KEY },
+      headers: {
+        'x-api-key': config.API_KEY,
+        'x-agent-id': workerId,
+      },
       payload: {
-        id: 'b0eebc99-9c0b-4ef8-bb6d-6bb9bd380b22',
+        id: workerId,
         role: 'WORKER',
         name: 'WorkerBot',
         paypalAccount: 'workerbot@test.com',
@@ -168,10 +183,13 @@ describe('API Integration via Fastify Inject', () => {
     const submitRes = await app.inject({
       method: 'POST',
       url: `/api/v1/contracts/${testContractPayload.id}/submit`,
-      headers: { 'x-api-key': config.API_KEY },
+      headers: {
+        'x-api-key': config.API_KEY,
+        'x-agent-id': workerId,
+      },
       payload: {
         contractId: testContractPayload.id,
-        workerId: 'b0eebc99-9c0b-4ef8-bb6d-6bb9bd380b22',
+        workerId: workerId,
         milestoneSequence: 1,
         submittedAt: new Date().toISOString(),
         artifacts: [
@@ -201,14 +219,15 @@ describe('API Integration via Fastify Inject', () => {
     expect(getBody.auditIntegrity.valid).toBe(true);
   });
 
-  it('allows voiding an active contract', async () => {
+  it('allows voiding an active contract and refunds buyer', async () => {
     const voidContractId = 'c0eebc99-9c0b-4ef8-bb6d-6bb9bd380c33';
-    await app.inject({
+    const createRes = await app.inject({
       method: 'POST',
       url: '/api/v1/contracts',
       headers: { 'x-api-key': config.API_KEY },
       payload: { ...testContractPayload, id: voidContractId },
     });
+    expect(createRes.statusCode).toBe(201);
 
     const voidRes = await app.inject({
       method: 'POST',
@@ -251,5 +270,46 @@ describe('API Integration via Fastify Inject', () => {
 
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(res.body).status).toBe('ACKNOWLEDGED');
+  });
+
+  it('manages protocol kill-switch and sweeps expired contracts (Claim 6)', async () => {
+    // 1. Toggle kill switch ON
+    const killRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/kill-switch',
+      headers: { 'x-api-key': config.API_KEY },
+      payload: { active: true },
+    });
+    expect(killRes.statusCode).toBe(200);
+    expect(JSON.parse(killRes.body).killSwitchActive).toBe(true);
+
+    // 2. Creating contract during kill-switch MUST be rejected with 503
+    const blockedRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/contracts',
+      headers: { 'x-api-key': config.API_KEY },
+      payload: {
+        ...testContractPayload,
+        id: 'd0eebc99-9c0b-4ef8-bb6d-6bb9bd380d44',
+      },
+    });
+    expect(blockedRes.statusCode).toBe(503);
+
+    // 3. Toggle kill switch OFF
+    await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/kill-switch',
+      headers: { 'x-api-key': config.API_KEY },
+      payload: { active: false },
+    });
+
+    // 4. Trigger sweep expired contracts
+    const sweepRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/sweep-expired',
+      headers: { 'x-api-key': config.API_KEY },
+    });
+    expect(sweepRes.statusCode).toBe(200);
+    expect(JSON.parse(sweepRes.body)).toHaveProperty('expiredCount');
   });
 });

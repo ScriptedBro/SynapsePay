@@ -40,7 +40,7 @@ describe('PayPal Adapters (Orders, Payouts, Client)', () => {
 
     const res = await ordersManager.createAuthorizationOrder({
       contractId: 'd0eebc99-9c0b-4ef8-bb6d-6bb9bd380d44',
-      amount: 150.0,
+      amountInCents: 15000,
       currency: 'USD',
     });
 
@@ -73,9 +73,23 @@ describe('PayPal Adapters (Orders, Payouts, Client)', () => {
     const authRes = await ordersManager.authorizeOrder('ORD_UNIT_TEST_999');
     expect(authRes.authorizationId).toBe('AUTH_REC_123');
 
-    const capRes = await ordersManager.captureAuthorization('AUTH_REC_123', 150.0, 'USD');
+    const capRes = await ordersManager.captureAuthorization('AUTH_REC_123', 15000, 'USD', true);
     expect(capRes.captureId).toBe('CAP_REC_123');
     expect(capRes.status).toBe('COMPLETED');
+  });
+
+  it('refunds captured funds via PayPalOrdersManager', async () => {
+    const mockRefundResponse = {
+      id: 'REF_REC_123',
+      status: 'COMPLETED',
+      amount: { value: '150.00', currency_code: 'USD' },
+    };
+
+    vi.spyOn(client, 'request').mockResolvedValue(mockRefundResponse);
+
+    const refundRes = await ordersManager.refundCapture('CAP_REC_123', 15000, 'USD', 'Customer cancellation');
+    expect(refundRes.refundId).toBe('REF_REC_123');
+    expect(refundRes.status).toBe('COMPLETED');
   });
 
   it('voids an active authorization', async () => {
@@ -98,7 +112,7 @@ describe('PayPal Adapters (Orders, Payouts, Client)', () => {
       contractId: 'e0eebc99-9c0b-4ef8-bb6d-6bb9bd380e55',
       milestoneSequence: 1,
       recipientEmail: 'agent-dev@paypal.sandbox',
-      amount: 150.0,
+      amountInCents: 15000,
       currency: 'USD',
     });
 
