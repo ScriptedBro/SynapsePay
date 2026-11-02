@@ -1,0 +1,46 @@
+{
+  "name": "synapsepay",
+  "version": "1.0.0",
+  "description": "Production Autonomous Agent-to-Agent (A2A) Commerce & Escrow Protocol powered by PayPal",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "scripts": {
+    "build": "tsc && cp src/api/console.html dist/api/console.html",
+    "start": "node dist/server.js",
+    "dev": "tsx watch src/server.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "keywords": [
+    "paypal",
+    "agentic-commerce",
+    "escrow",
+    "arbitration",
+    "ai-agents",
+    "payouts",
+    "a2a"
+  ],
+  "author": "SynapsePay Core Team",
+  "license": "MIT",
+  "packageManager": "pnpm@10.20.0",
+  "dependencies": {
+    "@ai-sdk/openai": "^4.0.106",
+    "@fastify/cors": "^11.3.1",
+    "@paypal/agent-toolkit": "^1.11.0",
+    "@paypal/paypal-server-sdk": "^2.5.0",
+    "ai": "^7.0.159",
+    "dotenv": "^18.0.9",
+    "fastify": "^5.12.7",
+    "uuid": "^14.0.3",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@vitest/coverage-v8": "^5.0.5",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}
