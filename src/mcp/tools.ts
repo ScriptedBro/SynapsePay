@@ -34,6 +34,47 @@ export function getSynapseToolDefinitions() {
       },
     },
     {
+      name: 'synapse_lock_escrow',
+      description: 'Lock funds in PayPal conditional authorization hold for an initialized contract (required before worker acceptance).',
+      parameters: {
+        type: 'object',
+        required: ['contractId', 'authorizationId'],
+        properties: {
+          contractId: { type: 'string', description: 'Contract UUID' },
+          authorizationId: { type: 'string', description: 'PayPal Authorization ID (e.g. AUTH-12345)' },
+        },
+      },
+    },
+    {
+      name: 'synapse_propose_terms',
+      description: 'Agent proposes counter-offer or negotiated terms on budget or delivery window (P1 Fix 14).',
+      parameters: {
+        type: 'object',
+        required: ['contractId', 'proposerAgentId', 'proposedBy', 'proposedAmountInCents', 'proposedDeliverySeconds'],
+        properties: {
+          contractId: { type: 'string' },
+          proposerAgentId: { type: 'string' },
+          proposedBy: { type: 'string', enum: ['BUYER', 'WORKER'] },
+          proposedAmountInCents: { type: 'integer' },
+          proposedDeliverySeconds: { type: 'integer' },
+          notes: { type: 'string' },
+        },
+      },
+    },
+    {
+      name: 'synapse_accept_terms',
+      description: 'Counterparty agent accepts proposed terms, updating contract spec and milestone amounts.',
+      parameters: {
+        type: 'object',
+        required: ['contractId', 'proposalId', 'acceptorAgentId'],
+        properties: {
+          contractId: { type: 'string' },
+          proposalId: { type: 'string' },
+          acceptorAgentId: { type: 'string' },
+        },
+      },
+    },
+    {
       name: 'synapse_accept_bounty',
       description: 'Worker agent accepts and commits to an active, funded PayPal escrow task.',
       parameters: {
@@ -49,7 +90,7 @@ export function getSynapseToolDefinitions() {
     },
     {
       name: 'synapse_submit_deliverable',
-      description: 'Worker agent submits code/data artifacts to trigger autonomous arbitration and instant PayPal payout release.',
+      description: 'Worker agent submits code/data artifacts to trigger autonomous arbitration and conditional payout.',
       parameters: {
         type: 'object',
         required: ['contractId', 'workerId', 'artifactName', 'artifactType', 'artifactContent'],
@@ -75,13 +116,25 @@ export function getSynapseToolDefinitions() {
       },
     },
     {
+      name: 'synapse_get_agent_reputation',
+      description: 'Query verifiable performance history, dispute rate, and Ed25519 signed attestation for an AI agent.',
+      parameters: {
+        type: 'object',
+        required: ['agentId'],
+        properties: {
+          agentId: { type: 'string' },
+        },
+      },
+    },
+    {
       name: 'synapse_verify_verdict',
-      description: 'Offline Ed25519 cryptographic verification of an arbitration verdict signed by Synapse Arbitrator.',
+      description: 'Cryptographic verification of an arbitration verdict using trusted arbitrator public key (P0 Fix 1).',
       parameters: {
         type: 'object',
         required: ['verdict'],
         properties: {
           verdict: { type: 'object', description: 'The ArbitrationVerdict object to verify' },
+          trustedPublicKeyHex: { type: 'string', description: 'Optional trusted public key. Defaults to protocol arbitrator key.' },
         },
       },
     },
@@ -92,7 +145,7 @@ export async function executeSynapseTool(
   name: string,
   args: any,
   contractManager: ContractManager,
-  _arbitrator: SynapseArbitrator
+  arbitrator: SynapseArbitrator
 ): Promise<any> {
   switch (name) {
     case 'synapse_browse_bounties': {
@@ -160,6 +213,29 @@ export async function executeSynapseTool(
       return result;
     }
 
+    case 'synapse_lock_escrow': {
+      return contractManager.confirmEscrowLock(args.contractId, args.authorizationId);
+    }
+
+    case 'synapse_propose_terms': {
+      return contractManager.proposeTerms(
+        args.contractId,
+        {
+          contractId: args.contractId,
+          proposerId: args.proposerAgentId,
+          proposedBy: args.proposedBy,
+          proposedAmountInCents: args.proposedAmountInCents,
+          proposedDeliverySeconds: args.proposedDeliverySeconds,
+          notes: args.notes,
+        },
+        args.proposerAgentId
+      );
+    }
+
+    case 'synapse_accept_terms': {
+      return contractManager.acceptTerms(args.contractId, args.proposalId, args.acceptorAgentId);
+    }
+
     case 'synapse_accept_bounty': {
       return contractManager.acceptContract(
         args.contractId,
@@ -197,15 +273,21 @@ export async function executeSynapseTool(
       return contractManager.getContract(args.contractId);
     }
 
+    case 'synapse_get_agent_reputation': {
+      return contractManager.getAgentReputation(args.agentId);
+    }
+
     case 'synapse_verify_verdict': {
-      const isValid = SynapseArbitrator.verifyVerdictSignature(args.verdict);
+      // P0 Fix 1: Pin trusted arbitrator public key, reject circular unpinned verification!
+      const trustedKey = args.trustedPublicKeyHex || arbitrator.getPublicKey();
+      const isValid = SynapseArbitrator.verifyVerdictSignature(args.verdict, trustedKey);
       return {
         verified: isValid,
-        arbitratorPublicKey: args.verdict.arbitratorPublicKey,
+        trustedArbitratorKey: trustedKey,
         algorithm: 'Ed25519',
         explanation: isValid
-          ? 'Verdict signature is valid and untampered.'
-          : 'Signature verification failed: payload has been modified or forged.',
+          ? 'Verdict signature verified against trusted arbitrator public key.'
+          : 'Verification failed: signature invalid or key mismatch.',
       };
     }
 

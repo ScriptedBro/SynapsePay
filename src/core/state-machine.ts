@@ -16,13 +16,16 @@ export class EscrowStateMachine {
     [EscrowState.DRAFT]: [
       EscrowState.NEGOTIATING,
       EscrowState.ESCROW_PENDING,
+      EscrowState.ESCROW_LOCKED,
       EscrowState.VOIDED,
     ],
     [EscrowState.NEGOTIATING]: [
+      EscrowState.DRAFT,
       EscrowState.ESCROW_PENDING,
       EscrowState.VOIDED,
     ],
     [EscrowState.ESCROW_PENDING]: [
+      EscrowState.NEGOTIATING,
       EscrowState.ESCROW_LOCKED,
       EscrowState.VOIDED,
     ],
@@ -36,9 +39,23 @@ export class EscrowStateMachine {
       EscrowState.VOIDED,
     ],
     [EscrowState.ARBITRATION_PENDING]: [
+      EscrowState.PAYOUT_PENDING,
       EscrowState.MILESTONE_SETTLED,
       EscrowState.SETTLED,
       EscrowState.REMEDIATION_REQUIRED,
+      EscrowState.DISPUTED,
+      EscrowState.VOIDED,
+    ],
+    [EscrowState.PAYOUT_PENDING]: [
+      EscrowState.MILESTONE_SETTLED,
+      EscrowState.SETTLED,
+      EscrowState.IN_PROGRESS, // When intermediate milestone completes
+      EscrowState.PAYOUT_FAILED,
+      EscrowState.DISPUTED,
+      EscrowState.VOIDED,
+    ],
+    [EscrowState.PAYOUT_FAILED]: [
+      EscrowState.PAYOUT_PENDING, // Payout retry
       EscrowState.DISPUTED,
       EscrowState.VOIDED,
     ],
@@ -55,6 +72,7 @@ export class EscrowStateMachine {
       EscrowState.VOIDED,
     ],
     [EscrowState.DISPUTED]: [
+      EscrowState.PAYOUT_PENDING,
       EscrowState.MILESTONE_SETTLED,
       EscrowState.SETTLED,
       EscrowState.VOIDED,

@@ -8,7 +8,20 @@ describe('EscrowStateMachine', () => {
     expect(EscrowStateMachine.canTransition(EscrowState.ESCROW_PENDING, EscrowState.ESCROW_LOCKED)).toBe(true);
     expect(EscrowStateMachine.canTransition(EscrowState.ESCROW_LOCKED, EscrowState.IN_PROGRESS)).toBe(true);
     expect(EscrowStateMachine.canTransition(EscrowState.IN_PROGRESS, EscrowState.ARBITRATION_PENDING)).toBe(true);
-    expect(EscrowStateMachine.canTransition(EscrowState.ARBITRATION_PENDING, EscrowState.SETTLED)).toBe(true);
+    expect(EscrowStateMachine.canTransition(EscrowState.ARBITRATION_PENDING, EscrowState.PAYOUT_PENDING)).toBe(true);
+    expect(EscrowStateMachine.canTransition(EscrowState.PAYOUT_PENDING, EscrowState.SETTLED)).toBe(true);
+  });
+
+  it('allows negotiation transitions', () => {
+    expect(EscrowStateMachine.canTransition(EscrowState.DRAFT, EscrowState.NEGOTIATING)).toBe(true);
+    expect(EscrowStateMachine.canTransition(EscrowState.NEGOTIATING, EscrowState.DRAFT)).toBe(true);
+    expect(EscrowStateMachine.canTransition(EscrowState.NEGOTIATING, EscrowState.ESCROW_PENDING)).toBe(true);
+  });
+
+  it('allows payout failure and retry loop', () => {
+    expect(EscrowStateMachine.canTransition(EscrowState.PAYOUT_PENDING, EscrowState.PAYOUT_FAILED)).toBe(true);
+    expect(EscrowStateMachine.canTransition(EscrowState.PAYOUT_FAILED, EscrowState.PAYOUT_PENDING)).toBe(true);
+    expect(EscrowStateMachine.canTransition(EscrowState.PAYOUT_FAILED, EscrowState.DISPUTED)).toBe(true);
   });
 
   it('allows remediation retry loop transitions', () => {

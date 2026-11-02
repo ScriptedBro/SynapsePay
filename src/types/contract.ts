@@ -141,11 +141,15 @@ export const SubmissionPayloadSchema = z.object({
 export type SubmissionPayload = z.infer<typeof SubmissionPayloadSchema>;
 
 export const NegotiationProposalSchema = z.object({
+  id: z.string().uuid(),
   contractId: z.string().uuid(),
   proposedBy: z.enum(['BUYER', 'WORKER']),
+  proposerId: z.string().min(1),
   proposedAmountInCents: z.number().int().positive(),
   proposedDeliverySeconds: z.number().int().positive(),
   notes: z.string().optional(),
+  status: z.enum(['PROPOSED', 'ACCEPTED', 'REJECTED']).default('PROPOSED'),
+  createdAt: z.string().datetime(),
 });
 
 export type NegotiationProposal = z.infer<typeof NegotiationProposalSchema>;

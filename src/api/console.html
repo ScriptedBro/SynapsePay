@@ -382,7 +382,7 @@
         <div class="vault-dot"></div>
         PAYPAL {{PAYPAL_MODE}} VAULT
       </div>
-      <input type="hidden" id="apiKeyInput" value="{{API_KEY}}" />
+      <input type="password" id="apiKeyInput" placeholder="Agent or Admin Key" style="background:#090d16; border:1px solid #1e293d; color:#f8fafc; font-size:0.75rem; padding:0.35rem 0.6rem; border-radius:4px; width: 140px;" onchange="localStorage.setItem('synapse_api_key', this.value.trim())" />
     </div>
   </nav>
 
@@ -630,7 +630,14 @@
     let selectedWorkerContract = null;
 
     function getApiKey() {
-      return document.getElementById('apiKeyInput').value.trim();
+      const stored = localStorage.getItem('synapse_api_key');
+      const input = document.getElementById('apiKeyInput');
+      if (input && input.value.trim()) return input.value.trim();
+      if (stored) {
+        if (input) input.value = stored;
+        return stored;
+      }
+      return '';
     }
 
     function switchView(viewName) {
@@ -984,7 +991,8 @@
     async function handleDeployContract(e) {
       e.preventDefault();
       const title = document.getElementById('buyerTaskTitle').value;
-      const amount = parseFloat(document.getElementById('buyerAmount').value);
+      const amountDollars = parseFloat(document.getElementById('buyerAmount').value) || 50;
+      const amountInCents = Math.round(amountDollars * 100);
       const desc = document.getElementById('buyerDesc').value;
       const expected = document.getElementById('buyerExpected').value;
 
@@ -997,7 +1005,7 @@
           name: "Enterprise Agent Operator",
           paypalAccount: "buyer@sandbox.paypal.com"
         },
-        totalAmount: amount,
+        totalAmountInCents: amountInCents,
         currency: "USD",
         sla: {
           slaId: crypto.randomUUID(),
@@ -1006,6 +1014,7 @@
           maxDeliverySeconds: 86400,
           maxArbitrationRetries: 2,
           minOverallScore: 80,
+          partialReleaseThreshold: 60,
           deterministicChecks: [
             {
               id: "chk_det",
@@ -1013,6 +1022,7 @@
               type: "REGEX_MATCH",
               targetField: "module.ts",
               expectedValue: expected,
+              weight: 2,
               required: true
             }
           ],
@@ -1021,6 +1031,7 @@
               id: "rub_spec",
               name: "Quality & Completeness",
               description: "Assess TypeScript typing, comments, and structure.",
+              weight: 2,
               minScore: 75,
               instructions: "Ensure modular exports and absence of any runtime bugs."
             }
@@ -1030,8 +1041,7 @@
           {
             sequence: 1,
             name: "Final Settlement",
-            percentage: 100,
-            amount: amount,
+            amountInCents: amountInCents,
             currency: "USD",
             status: "PENDING"
           }

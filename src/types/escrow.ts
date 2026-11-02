@@ -8,6 +8,8 @@ export enum EscrowState {
   IN_PROGRESS = 'IN_PROGRESS',
   ARBITRATION_PENDING = 'ARBITRATION_PENDING',
   REMEDIATION_REQUIRED = 'REMEDIATION_REQUIRED',
+  PAYOUT_PENDING = 'PAYOUT_PENDING',
+  PAYOUT_FAILED = 'PAYOUT_FAILED',
   MILESTONE_SETTLED = 'MILESTONE_SETTLED',
   DISPUTED = 'DISPUTED',
   SETTLED = 'SETTLED',
@@ -37,8 +39,9 @@ export const CapturedMilestoneRecordSchema = z.object({
   payoutBatchId: z.string().optional(),
   payoutItemId: z.string().optional(),
   amountInCents: z.number().int().positive(),
-  disbursedInCents: z.number().int().min(0),
-  refundedInCents: z.number().int().min(0),
+  capturedInCents: z.number().int().min(0).default(0),
+  disbursedInCents: z.number().int().min(0).default(0),
+  refundedInCents: z.number().int().min(0).default(0),
   settledAt: z.string().datetime(),
 });
 
