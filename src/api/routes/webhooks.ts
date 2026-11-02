@@ -8,6 +8,9 @@ export function registerWebhookRoutes(
   contractManager: ContractManager,
   webhookGuard: PayPalWebhookGuard
 ) {
+  // P0 Fix 6: Idempotent processed webhook store keyed by event.id
+  const processedWebhookEvents = new Set<string>();
+
   app.post('/api/v1/webhooks/paypal', async (request, reply) => {
     const rawHeaders = request.headers as Record<string, string | undefined>;
     const body = request.body;
@@ -21,6 +24,15 @@ export function registerWebhookRoutes(
     }
 
     const event = PayPalWebhookPayloadSchema.parse(body);
+
+    // P0 Fix 6: Prevent replay and double-processing of identical webhook events
+    if (processedWebhookEvents.has(event.id)) {
+      return reply.status(200).send({
+        status: 'DUPLICATE_ACKNOWLEDGED',
+        eventId: event.id,
+      });
+    }
+    processedWebhookEvents.add(event.id);
 
     switch (event.event_type) {
       case 'PAYMENT.AUTHORIZATION.CREATED': {
@@ -48,27 +60,31 @@ export function registerWebhookRoutes(
       }
 
       case 'PAYMENT.PAYOUTS-ITEM.SUCCEEDED': {
-        // Fix for Claim 5: Handle payout item confirmation
+        // P0 Fix 5: Authoritatively transition to SETTLED only upon PayPal confirmation!
         const payoutResource = event.resource;
         const batchId = payoutResource.payout_batch_id;
-        const contractId = batchId ? contractManager.getContractIdByPayoutBatchId(batchId) : undefined;
-        if (contractId) {
+        const itemId = payoutResource.payout_item_id || payoutResource.payout_item?.payout_item_id;
+
+        if (batchId) {
           try {
-            contractManager.getContract(contractId);
-            // Confirmed in ledger
+            contractManager.confirmPayoutItemSuccess(batchId, itemId);
           } catch {}
         }
         break;
       }
 
-      case 'PAYMENT.PAYOUTS-ITEM.FAILED': {
-        // Fix for Claim 5: Handle payout failures
+      case 'PAYMENT.PAYOUTS-ITEM.FAILED':
+      case 'PAYMENT.PAYOUTS-ITEM.RETURNED':
+      case 'PAYMENT.PAYOUTS-ITEM.BLOCKED': {
+        // P0 Fix 5: Transition to PAYOUT_FAILED when PayPal rejects or returns payment item
         const payoutResource = event.resource;
         const batchId = payoutResource.payout_batch_id;
-        const contractId = batchId ? contractManager.getContractIdByPayoutBatchId(batchId) : undefined;
-        if (contractId) {
+        const itemId = payoutResource.payout_item_id || payoutResource.payout_item?.payout_item_id;
+        const errorReason = payoutResource.errors?.name || payoutResource.errors?.message || 'PAYOUT_ITEM_FAILED';
+
+        if (batchId) {
           try {
-            // Log anomaly
+            contractManager.confirmPayoutItemFailure(batchId, itemId, errorReason);
           } catch {}
         }
         break;
@@ -79,7 +95,7 @@ export function registerWebhookRoutes(
         const contractId = contractManager.getContractIdByAuthId(authId);
         if (contractId) {
           try {
-            contractManager.voidContract(contractId, 'PayPal Authorization Voided Remotely');
+            await contractManager.voidContract(contractId, 'PayPal Authorization Voided Remotely');
           } catch {}
         }
         break;
@@ -89,6 +105,10 @@ export function registerWebhookRoutes(
         break;
     }
 
-    return reply.status(200).send({ status: 'ACKNOWLEDGED', eventId: event.id });
+    return reply.status(200).send({
+      status: 'ACKNOWLEDGED',
+      eventId: event.id,
+      eventType: event.event_type,
+    });
   });
 }

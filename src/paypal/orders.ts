@@ -27,6 +27,7 @@ export class PayPalOrdersManager {
     currency: string;
     returnUrl?: string;
     cancelUrl?: string;
+    requestId?: string;
   }): Promise<CreateOrderResult> {
     const value = (params.amountInCents / 100).toFixed(2);
 
@@ -52,9 +53,15 @@ export class PayPalOrdersManager {
       },
     };
 
+    // P0 Fix 6: Deterministic idempotency request ID
+    const requestId = params.requestId ?? `order_${params.contractId}`;
+
     const data = await this.client.request<any>('/v2/checkout/orders', {
       method: 'POST',
       body: payload,
+      headers: {
+        'PayPal-Request-Id': requestId,
+      },
     });
 
     const approvalLink = data.links?.find((link: any) => link.rel === 'approve');
@@ -95,7 +102,8 @@ export class PayPalOrdersManager {
     authorizationId: string,
     amountInCents: number,
     currency: string,
-    isFinalCapture: boolean = true
+    isFinalCapture: boolean = true,
+    requestId?: string
   ): Promise<CaptureResult> {
     const value = (amountInCents / 100).toFixed(2);
 
@@ -107,13 +115,16 @@ export class PayPalOrdersManager {
       is_final_capture: isFinalCapture,
     };
 
+    // P0 Fix 6: Deterministic idempotency key per capture attempt
+    const finalRequestId = requestId ?? `cap_${authorizationId}_${amountInCents}_${isFinalCapture}`;
+
     const data = await this.client.request<any>(
       `/v2/payments/authorizations/${authorizationId}/capture`,
       {
         method: 'POST',
         body: payload,
         headers: {
-          'PayPal-Request-Id': `cap_${authorizationId}_${Date.now()}`,
+          'PayPal-Request-Id': finalRequestId,
         },
       }
     );
@@ -129,7 +140,8 @@ export class PayPalOrdersManager {
     captureId: string,
     amountInCents?: number,
     currency?: string,
-    note?: string
+    note?: string,
+    requestId?: string
   ): Promise<RefundResult> {
     const payload: any = {};
     if (amountInCents !== undefined && currency) {
@@ -142,13 +154,16 @@ export class PayPalOrdersManager {
       payload.note_to_payer = note;
     }
 
+    // P0 Fix 6: Deterministic refund idempotency key
+    const finalRequestId = requestId ?? `ref_${captureId}_${amountInCents ?? 'full'}`;
+
     const data = await this.client.request<any>(
       `/v2/payments/captures/${captureId}/refund`,
       {
         method: 'POST',
         body: Object.keys(payload).length > 0 ? payload : undefined,
         headers: {
-          'PayPal-Request-Id': `ref_${captureId}_${Date.now()}`,
+          'PayPal-Request-Id': finalRequestId,
         },
       }
     );
@@ -160,11 +175,14 @@ export class PayPalOrdersManager {
     };
   }
 
-  public async voidAuthorization(authorizationId: string): Promise<boolean> {
+  public async voidAuthorization(authorizationId: string, requestId?: string): Promise<boolean> {
+    // P0 Fix 6: Deterministic void idempotency key
+    const finalRequestId = requestId ?? `void_${authorizationId}`;
+
     await this.client.request(`/v2/payments/authorizations/${authorizationId}/void`, {
       method: 'POST',
       headers: {
-        'PayPal-Request-Id': `void_${authorizationId}_${Date.now()}`,
+        'PayPal-Request-Id': finalRequestId,
       },
     });
     return true;
