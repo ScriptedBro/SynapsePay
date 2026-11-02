@@ -19,6 +19,45 @@ export function registerContractRoutes(
     };
   });
 
+  // Cryptographic Verdict Verification Endpoint (A & D Fix)
+  app.post('/api/v1/arbitrator/verify', async (request, reply) => {
+    const schema = z.object({
+      verdict: z.any(),
+      trustedPublicKeyHex: z.string().optional(),
+    });
+    const parsed = schema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({
+        valid: false,
+        reason: `Invalid verification request payload: ${parsed.error.message}`,
+      });
+    }
+
+    const { verdict, trustedPublicKeyHex } = parsed.data;
+    const trustedKey = trustedPublicKeyHex || arbitrator.getPublicKey();
+
+    if (!verdict || typeof verdict !== 'object' || !verdict.signedVerdictSignature) {
+      return reply.send({
+        valid: false,
+        algorithm: 'Ed25519',
+        trustedPublicKey: trustedKey,
+        keyFingerprint: arbitrator.getFingerprint(),
+        reason: 'Verdict payload is missing signedVerdictSignature field.',
+      });
+    }
+
+    const isValid = SynapseArbitrator.verifyVerdictSignature(verdict, trustedKey);
+    return reply.send({
+      valid: isValid,
+      algorithm: 'Ed25519',
+      trustedPublicKey: trustedKey,
+      keyFingerprint: arbitrator.getFingerprint(),
+      reason: isValid
+        ? 'Verdict signature verified successfully against pinned authority public key.'
+        : 'Cryptographic signature mismatch: Signature does not match pinned arbitrator key or verdict payload was altered.',
+    });
+  });
+
   // Emergency Admin Kill Switch (P1 Fix 8: Admin only)
   app.post('/api/v1/admin/kill-switch', async (request, reply) => {
     const schema = z.object({ active: z.boolean() });

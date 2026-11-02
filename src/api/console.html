@@ -827,6 +827,9 @@
       </nav>
 
       <div class="nav-status">
+        <div class="status-pill" id="navKeyBadge" onclick="promptApiKey()" style="cursor:pointer;" title="Click to set or change your API key">
+          🔑 <span id="navKeyLabel">SET API KEY</span>
+        </div>
         <div class="status-pill" title="Connected to PayPal Sandbox Orders & Payouts API">
           <span class="pulse-dot"></span>
           <span>PAYPAL {{PAYPAL_MODE}}</span>
@@ -1294,17 +1297,17 @@
           </div>
         </div>
 
-        <!-- Right: Offline Cryptographic Verifier Widget -->
+        <!-- Right: Cryptographic Verifier Widget -->
         <div class="neat-box">
           <div class="neat-box-header">
             <div class="neat-box-title">
-              <span>🔐</span> Offline Ed25519 Verdict Verifier
+              <span>🔐</span> Cryptographic Ed25519 Verdict Verifier
             </div>
-            <span class="hero-tag">CLIENT-SIDE WEB CRYPTO</span>
+            <span class="hero-tag">ED25519 ASYMMETRIC VERIFICATION</span>
           </div>
           <div class="neat-box-body">
             <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;">
-              Paste any verdict JSON to verify its digital signature against the pinned arbitrator key completely offline.
+              Verify any verdict's mathematical digital signature against the pinned arbitrator authority public key. Forged signatures, tampered scores, or unauthorized keys will be mathematically rejected.
             </p>
 
             <div class="form-grid">
@@ -1313,7 +1316,7 @@
                 <textarea id="verifierPayloadInput" class="form-textarea" style="min-height: 160px; font-family: var(--font-mono); font-size: 0.75rem;" placeholder='Paste verdict JSON here...'></textarea>
               </div>
 
-              <button class="btn btn-primary" onclick="verifyVerdictOffline()">
+              <button class="btn btn-primary" onclick="verifyVerdictSignature()">
                 🔍 Verify Signature Cryptographically
               </button>
 
@@ -1382,9 +1385,16 @@
               </div>
 
               <div style="background: #FFF; border: 1px solid var(--border-color); padding: 1rem; font-family: var(--font-mono); font-size: 0.75rem; word-break: break-all;">
-                <div style="font-weight: 700; color: var(--sahara-brown-900); margin-bottom: 0.35rem;">Ed25519 Attestation Signature:</div>
+                <div style="font-weight: 700; color: var(--sahara-brown-900); margin-bottom: 0.35rem;">Ed25519 Attestation Signature (Arbitrator Certified):</div>
                 <div id="repSignature" style="color: var(--sahara-clay-500);">...</div>
               </div>
+
+              <div style="margin-top: 1.25rem;">
+                <button class="btn btn-secondary" style="padding: 0.45rem 0.85rem; font-size: 0.8rem;" onclick="loadSignedCheckpoint()">
+                  📜 Inspect Cryptographic Audit Checkpoint
+                </button>
+              </div>
+              <div id="checkpointDisplayBox" style="margin-top: 1rem; display: none;"></div>
             </div>
           </div>
 
@@ -1413,7 +1423,53 @@
     let simStepIndex = 0;
 
     function getApiKey() {
-      return localStorage.getItem('synapse_api_key') || 'admin_master_secret_key_32_characters';
+      const urlParams = new URLSearchParams(window.location.search);
+      const queryKey = urlParams.get('key');
+      if (queryKey) {
+        localStorage.setItem('synapse_api_key', queryKey);
+        return queryKey;
+      }
+      return localStorage.getItem('synapse_api_key') || '';
+    }
+
+    function setApiKey(key) {
+      if (key && key.trim()) {
+        localStorage.setItem('synapse_api_key', key.trim());
+      } else {
+        localStorage.removeItem('synapse_api_key');
+      }
+      updateApiKeyUI();
+      fetchProtocolData();
+    }
+
+    function promptApiKey(customMsg) {
+      const current = getApiKey();
+      const promptText = (customMsg ? customMsg + '\n\n' : '') +
+        'Select or enter your API key:\n' +
+        '• Default Demo Agent Key: "agent_worker_gemini_pro"\n' +
+        '• Or enter your custom Agent or Admin key:';
+      const entered = prompt(promptText, current || 'agent_worker_gemini_pro');
+      if (entered !== null) {
+        setApiKey(entered);
+      }
+    }
+
+    function updateApiKeyUI() {
+      const key = getApiKey();
+      const badge = document.getElementById('navKeyBadge');
+      const label = document.getElementById('navKeyLabel');
+      if (label && badge) {
+        if (key) {
+          const isAgent = key.startsWith('agent_');
+          label.innerText = isAgent ? 'AGENT KEY' : 'ADMIN KEY';
+          badge.style.borderColor = 'var(--status-pass)';
+          badge.style.color = 'var(--status-pass)';
+        } else {
+          label.innerText = 'SET API KEY';
+          badge.style.borderColor = 'var(--status-pending)';
+          badge.style.color = 'var(--status-pending)';
+        }
+      }
     }
 
     // Tab Navigation
@@ -1430,8 +1486,32 @@
       if (activeSec) activeSec.classList.add('active');
     }
 
+    function renderUnauthenticatedState() {
+      const bContainer = document.getElementById('buyerContractList');
+      const wContainer = document.getElementById('workerContractList');
+      const msg = `
+        <div style="background:var(--bg-sunken); border:1.5px dashed var(--border-dark); padding:1.5rem; text-align:center;">
+          <h4 style="margin-bottom:0.5rem; font-size:1rem;">Authentication Required</h4>
+          <p style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:1rem;">
+            An API key is required to view contracts and interact with the protocol.
+          </p>
+          <div style="display:flex; justify-content:center; gap:0.5rem; flex-wrap:wrap;">
+            <button class="btn btn-primary" style="padding:0.4rem 0.8rem; font-size:0.8rem;" onclick="setApiKey('agent_worker_gemini_pro')">
+              ⚡ Use Demo Agent Key
+            </button>
+            <button class="btn btn-secondary" style="padding:0.4rem 0.8rem; font-size:0.8rem;" onclick="promptApiKey()">
+              🔑 Enter Custom Key
+            </button>
+          </div>
+        </div>
+      `;
+      if (bContainer) bContainer.innerHTML = msg;
+      if (wContainer) wContainer.innerHTML = msg;
+    }
+
     // Load Live Protocol Data
     async function fetchProtocolData() {
+      updateApiKeyUI();
       try {
         // Fetch Public Key & Fingerprint
         const keyRes = await fetch('/api/v1/arbitrator/public-key');
@@ -1443,11 +1523,26 @@
         }
 
         // Fetch Contracts
-        const contractsRes = await fetch('/api/v1/contracts', {
-          headers: { 'x-api-key': getApiKey() }
-        });
-        if (contractsRes.ok) {
-          globalContracts = await contractsRes.json();
+        const key = getApiKey();
+        if (key) {
+          const contractsRes = await fetch('/api/v1/contracts', {
+            headers: { 'x-api-key': key }
+          });
+          if (contractsRes.ok) {
+            globalContracts = await contractsRes.json();
+            renderBuyerContracts();
+            renderWorkerContracts();
+            updateMetrics();
+          } else if (contractsRes.status === 401) {
+            renderUnauthenticatedState();
+          }
+        } else {
+          renderUnauthenticatedState();
+        }
+      } catch (err) {
+        console.error('Data fetch error:', err);
+      }
+    }
           renderBuyerContracts();
           renderWorkerContracts();
           updateMetrics();
@@ -1600,12 +1695,18 @@
         metadata: {}
       };
 
+      const key = getApiKey();
+      if (!key) {
+        promptApiKey('An API key is required to deploy contracts.');
+        return;
+      }
+
       try {
         const res = await fetch('/api/v1/contracts', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'x-api-key': getApiKey()
+            'x-api-key': key
           },
           body: JSON.stringify(payload)
         });
@@ -1614,7 +1715,7 @@
           // Confirm authorization hold for seamless demo
           await fetch(`/api/v1/contracts/${contractId}/confirm-lock`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-api-key': getApiKey() },
+            headers: { 'Content-Type': 'application/json', 'x-api-key': key },
             body: JSON.stringify({ authorizationId: 'AUTH-' + Math.random().toString(36).substring(2, 8).toUpperCase() })
           });
 
@@ -1631,6 +1732,12 @@
 
     async function handleSubmitDeliverable(e) {
       e.preventDefault();
+      const key = getApiKey();
+      if (!key) {
+        promptApiKey('An API key is required to submit deliverables.');
+        return;
+      }
+
       const contractId = document.getElementById('submitContractSelect').value;
       if (!contractId) {
         alert('Please select a contract first.');
@@ -1646,7 +1753,7 @@
       if (item && item.escrow.state === 'ESCROW_LOCKED') {
         await fetch(`/api/v1/contracts/${contractId}/accept`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-api-key': getApiKey(), 'x-agent-id': workerId },
+          headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'x-agent-id': workerId },
           body: JSON.stringify({
             id: workerId,
             role: 'WORKER',
@@ -1661,7 +1768,7 @@
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'x-api-key': getApiKey(),
+            'x-api-key': key,
             'x-agent-id': workerId
           },
           body: JSON.stringify({
@@ -1693,8 +1800,9 @@
       if (!item) return;
 
       switchTab('court');
-      if (item.verdict) {
-        renderVerdictDetail(item.verdict);
+      const v = item.latestVerdict || item.verdict;
+      if (v) {
+        renderVerdictDetail(v);
       } else {
         document.getElementById('verdictDetailArea').innerHTML = `
           <div style="padding: 1.5rem; background: var(--bg-sunken); border: 1px solid var(--border-color);">
@@ -1714,8 +1822,9 @@
       document.getElementById('verifierPayloadInput').value = JSON.stringify(verdict, null, 2);
 
       let checksHtml = '';
-      if (verdict.deterministicCheckResults) {
-        checksHtml += verdict.deterministicCheckResults.map(chk => `
+      const detChecks = verdict.deterministicResults || verdict.deterministicCheckResults || [];
+      if (detChecks.length > 0) {
+        checksHtml += detChecks.map(chk => `
           <div class="check-row">
             <div>
               <strong>${escapeHtml(chk.name)}</strong>
@@ -1728,8 +1837,9 @@
         `).join('');
       }
 
-      if (verdict.semanticRubricResults) {
-        checksHtml += verdict.semanticRubricResults.map(rub => `
+      const semChecks = verdict.semanticResults || verdict.semanticRubricResults || [];
+      if (semChecks.length > 0) {
+        checksHtml += semChecks.map(rub => `
           <div class="check-row">
             <div>
               <strong>${escapeHtml(rub.name)} (LLM Evaluation)</strong>
@@ -1776,37 +1886,56 @@
       `;
     }
 
-    async function verifyVerdictOffline() {
+    async function verifyVerdictSignature() {
       const raw = document.getElementById('verifierPayloadInput').value.trim();
       const resultBox = document.getElementById('verifierResultBox');
       resultBox.style.display = 'block';
 
       if (!raw) {
-        resultBox.innerHTML = '<div style="color:var(--status-fail);">Please paste a verdict JSON payload.</div>';
+        resultBox.innerHTML = '<div style="padding:0.85rem; background:var(--status-fail-bg); border:1.5px solid var(--status-fail); color:var(--status-fail); font-weight:600;">Please paste a verdict JSON payload.</div>';
         return;
       }
 
       try {
         const parsed = JSON.parse(raw);
         if (!parsed.signedVerdictSignature) {
-          resultBox.innerHTML = '<div style="color:var(--status-fail);">Payload missing signedVerdictSignature field.</div>';
+          resultBox.innerHTML = '<div style="padding:0.85rem; background:var(--status-fail-bg); border:1.5px solid var(--status-fail); color:var(--status-fail); font-weight:600;">Payload missing signedVerdictSignature field.</div>';
           return;
         }
 
-        // Verify against API endpoint or client-side
-        const checkRes = await fetch('/api/v1/arbitrator/public-key');
-        const checkData = await checkRes.json();
+        resultBox.innerHTML = '<div style="padding:0.85rem; background:var(--bg-sunken); border:1.5px solid var(--border-dark); color:var(--text-secondary); font-family:var(--font-mono); font-size:0.82rem;">Executing Ed25519 cryptographic curve verification against pinned authority key...</div>';
 
-        resultBox.innerHTML = `
-          <div style="background:var(--status-pass-bg); border:1.5px solid var(--status-pass); padding:1rem; color:var(--status-pass);">
-            <div style="font-weight:700; margin-bottom:0.35rem;">✓ Ed25519 Cryptographic Signature Verified</div>
-            <div style="font-size:0.82rem; line-height:1.4;">
-              Signature matched pinned authority public key (SHA-256 fingerprint: ${checkData.fingerprint.substring(0, 16)}...). Verdict is mathematically authentic and untampered.
+        const verifyRes = await fetch('/api/v1/arbitrator/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ verdict: parsed })
+        });
+        const verifyData = await verifyRes.json();
+
+        if (verifyData.valid) {
+          resultBox.innerHTML = `
+            <div style="background:var(--status-pass-bg); border:2px solid var(--status-pass); padding:1.15rem; color:var(--status-pass);">
+              <div style="font-weight:800; font-size:0.95rem; margin-bottom:0.35rem;">✓ Ed25519 Cryptographic Signature VERIFIED</div>
+              <div style="font-size:0.82rem; line-height:1.5; color:var(--sahara-brown-900);">
+                The mathematical Ed25519 signature is authentic and verified against the pinned arbitrator public key.<br>
+                <span class="mono" style="font-size:0.75rem; color:var(--text-secondary);">Authority Key Fingerprint: ${escapeHtml(verifyData.keyFingerprint || '')}</span><br>
+                <strong>Integrity:</strong> Verdict payload is untampered, non-circular, and authentic.
+              </div>
             </div>
-          </div>
-        `;
+          `;
+        } else {
+          resultBox.innerHTML = `
+            <div style="background:var(--status-fail-bg); border:2px solid var(--status-fail); padding:1.15rem; color:var(--status-fail);">
+              <div style="font-weight:800; font-size:0.95rem; margin-bottom:0.35rem;">❌ Cryptographic Verification FAILED</div>
+              <div style="font-size:0.82rem; line-height:1.5; color:var(--sahara-brown-900);">
+                <strong>Reason:</strong> ${escapeHtml(verifyData.reason || 'Cryptographic signature mismatch.')}<br>
+                <span style="color:var(--status-fail); font-size:0.78rem;">Warning: This verdict was altered, issued by an untrusted public key, or possesses an invalid signature.</span>
+              </div>
+            </div>
+          `;
+        }
       } catch (err) {
-        resultBox.innerHTML = `<div style="color:var(--status-fail);">JSON parse error: ${err.message}</div>`;
+        resultBox.innerHTML = `<div style="padding:0.85rem; background:var(--status-fail-bg); border:1.5px solid var(--status-fail); color:var(--status-fail); font-weight:600;">Invalid JSON: ${escapeHtml(err.message)}</div>`;
       }
     }
 
@@ -1831,6 +1960,39 @@
         }
       } catch (err) {
         alert('Network error: ' + err.message);
+      }
+    }
+
+    async function loadSignedCheckpoint() {
+      const box = document.getElementById('checkpointDisplayBox');
+      box.style.display = 'block';
+      if (globalContracts.length === 0) {
+        box.innerHTML = '<div style="color:var(--text-muted); font-size:0.8rem;">No contracts available to generate checkpoint.</div>';
+        return;
+      }
+      const contractId = globalContracts[0].contract.id;
+      const key = getApiKey();
+      try {
+        const res = await fetch(`/api/v1/contracts/${contractId}/checkpoint`, {
+          headers: key ? { 'x-api-key': key } : {}
+        });
+        if (res.ok) {
+          const data = await res.json();
+          box.innerHTML = `
+            <div style="background:var(--bg-sunken); border:1.5px solid var(--border-dark); padding:1rem; font-family:var(--font-mono); font-size:0.75rem; word-break:break-all;">
+              <div style="font-weight:700; color:var(--sahara-brown-900); margin-bottom:0.35rem;">Cryptographic State Checkpoint (${data.contractId}):</div>
+              <div>State Hash: <span style="color:var(--sahara-clay-500);">${data.checkpoint?.stateHash || ''}</span></div>
+              <div>Audit Merkle Root: <span style="color:var(--sahara-brown-800);">${data.checkpoint?.auditMerkleRoot || ''}</span></div>
+              <div>Arbitrator Key: <span>${(data.arbitratorPublicKey || '').substring(0, 32)}...</span></div>
+              <div>Signature: <span style="color:var(--status-pass);">${data.checkpointSignature || ''}</span></div>
+            </div>
+          `;
+        } else {
+          const err = await res.json();
+          box.innerHTML = `<div style="color:var(--status-fail); font-size:0.8rem;">Checkpoint error: ${escapeHtml(err.detail || err.message)}</div>`;
+        }
+      } catch (err) {
+        box.innerHTML = `<div style="color:var(--status-fail); font-size:0.8rem;">Network error: ${escapeHtml(err.message)}</div>`;
       }
     }
 

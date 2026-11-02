@@ -54,8 +54,10 @@ export class PayPalWebhookGuard {
       };
     }
 
-    // 4. If webhookId is configured, perform remote signature verification via PayPal API
-    if (this.webhookId) {
+    // 4. Remote signature verification via PayPal API
+    const isConfiguredWebhookId = Boolean(this.webhookId && !this.webhookId.includes('your_paypal_webhook_id'));
+
+    if (isConfiguredWebhookId) {
       try {
         const bodyObj = typeof rawBody === 'string' ? JSON.parse(rawBody) : rawBody;
         const verificationPayload = {
@@ -89,7 +91,18 @@ export class PayPalWebhookGuard {
       }
     }
 
-    // Header security checks passed
-    return { isValid: true };
+    // Fail closed in production when PAYPAL_WEBHOOK_ID is unconfigured to prevent spoofing
+    if (process.env.NODE_ENV === 'production') {
+      return {
+        isValid: false,
+        reason: 'PAYPAL_WEBHOOK_ID is unconfigured in production environment. Webhook verification rejected to prevent replay attacks.',
+      };
+    }
+
+    // In local sandbox development/testing with missing webhook ID:
+    return {
+      isValid: true,
+      reason: 'Sandbox local test fallback: Header checks passed (PAYPAL_WEBHOOK_ID unconfigured)',
+    };
   }
 }

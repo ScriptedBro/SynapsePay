@@ -20,7 +20,8 @@ export function createAuthGuard(adminApiKey: string) {
       path === '/health' ||
       path === '/api/v1/info' ||
       path === '/api/v1/arbitrator/public-key' ||
-      path.startsWith('/api/v1/agents/') && path.endsWith('/reputation') ||
+      path === '/api/v1/arbitrator/verify' ||
+      (path.startsWith('/api/v1/agents/') && path.endsWith('/reputation')) ||
       path === '/'
     ) {
       return;

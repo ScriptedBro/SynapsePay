@@ -432,4 +432,48 @@ describe('API Integration via Fastify Inject', () => {
     expect(cpBody).toHaveProperty('rootHash');
     expect(cpBody).toHaveProperty('signature');
   });
+
+  it('cryptographically verifies authentic verdicts and rejects forged verdicts via /api/v1/arbitrator/verify', async () => {
+    // 1. Rejects forged verdict with fake signature
+    const fakeVerdict = {
+      contractId: '00000000-0000-0000-0000-000000000000',
+      milestoneSequence: 1,
+      decision: 'RELEASE',
+      overallScore: 100,
+      payoutPercentage: 1.0,
+      canRetry: false,
+      evaluatedAt: new Date().toISOString(),
+      deterministicResults: [],
+      semanticResults: [],
+      rationale: 'Attacker forged verdict',
+      arbitratorPublicKey: 'deadbeef',
+      signedVerdictSignature: '00',
+    };
+
+    const forgedRes = await app.inject({
+      method: 'POST',
+      url: '/api/v1/arbitrator/verify',
+      payload: { verdict: fakeVerdict },
+    });
+    expect(forgedRes.statusCode).toBe(200);
+    const forgedBody = JSON.parse(forgedRes.body);
+    expect(forgedBody.valid).toBe(false);
+    expect(forgedBody.reason).toContain('Cryptographic signature mismatch');
+
+    // 2. Accepts authentic verdict signed by server arbitrator
+    const seededContracts = contractManager.listContracts();
+    const settledContract = seededContracts.find((c) => c.verdict && c.verdict.signedVerdictSignature);
+    if (settledContract && settledContract.verdict) {
+      const validRes = await app.inject({
+        method: 'POST',
+        url: '/api/v1/arbitrator/verify',
+        payload: { verdict: settledContract.verdict },
+      });
+      expect(validRes.statusCode).toBe(200);
+      const validBody = JSON.parse(validRes.body);
+      expect(validBody.valid).toBe(true);
+      expect(validBody.algorithm).toBe('Ed25519');
+      expect(validBody.reason).toContain('verified successfully');
+    }
+  });
 });
