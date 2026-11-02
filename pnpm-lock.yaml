@@ -14,6 +14,9 @@ importers:
       '@fastify/cors':
         specifier: ^11.3.1
         version: 11.3.1
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.32.2
+        version: 1.32.2(zod@3.25.76)
       '@paypal/agent-toolkit':
         specifier: ^1.11.0
         version: 1.11.0(react@19.3.1)

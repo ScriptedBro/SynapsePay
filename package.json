@@ -9,6 +9,7 @@
     "build": "tsc && cp src/api/console.html dist/api/console.html",
     "start": "node dist/server.js",
     "dev": "tsx watch src/server.ts",
+    "mcp": "node dist/mcp/server.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"
@@ -28,6 +29,7 @@
   "dependencies": {
     "@ai-sdk/openai": "^4.0.106",
     "@fastify/cors": "^11.3.1",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@paypal/agent-toolkit": "^1.11.0",
     "@paypal/paypal-server-sdk": "^2.5.0",
     "ai": "^7.0.159",
