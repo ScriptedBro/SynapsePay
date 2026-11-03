@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { ContractManager } from '../core/contract-manager.js';
 import { SynapseArbitrator } from '../arbitration/arbitrator.js';
 
@@ -294,4 +295,156 @@ export async function executeSynapseTool(
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
+}
+
+/**
+ * Register all SynapsePay escrow, arbitration, and reputation tools onto an McpServer instance
+ * (such as PayPalAgentToolkit from @paypal/agent-toolkit/mcp).
+ */
+export function registerSynapseTools(
+  mcpServer: any,
+  contractManager: ContractManager,
+  arbitrator: SynapseArbitrator
+) {
+  mcpServer.tool(
+    'synapse_browse_bounties',
+    'Browse available AI agent tasks with guaranteed funds locked in PayPal Escrow.',
+    {
+      filterState: z.enum(['ESCROW_LOCKED', 'IN_PROGRESS', 'SETTLED', 'ALL']).optional(),
+    },
+    async (args: any) => {
+      const result = await executeSynapseTool('synapse_browse_bounties', args, contractManager, arbitrator);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  mcpServer.tool(
+    'synapse_deploy_contract',
+    'Buyer agent drafts an SLA task specification and initializes a conditional PayPal Escrow hold.',
+    {
+      taskTitle: z.string().describe('Title of the task'),
+      taskDescription: z.string().describe('Detailed functional instructions'),
+      totalAmountInCents: z.number().int().describe('Budget in integer cents (e.g. 5000 = $50.00)'),
+      buyerName: z.string(),
+      buyerPayPalEmail: z.string(),
+      deterministicPattern: z.string().optional().describe('Regex pattern or schema requirement'),
+    },
+    async (args: any) => {
+      const result = await executeSynapseTool('synapse_deploy_contract', args, contractManager, arbitrator);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  mcpServer.tool(
+    'synapse_lock_escrow',
+    'Lock funds in PayPal conditional authorization hold for an initialized contract (required before worker acceptance).',
+    {
+      contractId: z.string().describe('Contract UUID'),
+      authorizationId: z.string().describe('PayPal Authorization ID (e.g. AUTH-12345)'),
+    },
+    async (args: any) => {
+      const result = await executeSynapseTool('synapse_lock_escrow', args, contractManager, arbitrator);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  mcpServer.tool(
+    'synapse_propose_terms',
+    'Agent proposes counter-offer or negotiated terms on budget or delivery window.',
+    {
+      contractId: z.string(),
+      proposerAgentId: z.string(),
+      proposedBy: z.enum(['BUYER', 'WORKER']),
+      proposedAmountInCents: z.number().int(),
+      proposedDeliverySeconds: z.number().int(),
+      notes: z.string().optional(),
+    },
+    async (args: any) => {
+      const result = await executeSynapseTool('synapse_propose_terms', args, contractManager, arbitrator);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  mcpServer.tool(
+    'synapse_accept_terms',
+    'Counterparty agent accepts proposed terms, updating contract spec and milestone amounts.',
+    {
+      contractId: z.string(),
+      proposalId: z.string(),
+      acceptorAgentId: z.string(),
+    },
+    async (args: any) => {
+      const result = await executeSynapseTool('synapse_accept_terms', args, contractManager, arbitrator);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  mcpServer.tool(
+    'synapse_accept_bounty',
+    'Worker agent accepts and commits to an active, funded PayPal escrow task.',
+    {
+      contractId: z.string().describe('UUID of the contract'),
+      workerId: z.string().describe('UUID of the worker agent'),
+      workerName: z.string().describe('Name of the worker agent'),
+      workerPayPalEmail: z.string().describe('Worker PayPal sandbox email for payout'),
+    },
+    async (args: any) => {
+      const result = await executeSynapseTool('synapse_accept_bounty', args, contractManager, arbitrator);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  mcpServer.tool(
+    'synapse_submit_deliverable',
+    'Worker agent submits code/data artifacts to trigger autonomous arbitration and conditional payout.',
+    {
+      contractId: z.string(),
+      workerId: z.string(),
+      artifactName: z.string(),
+      artifactType: z.enum(['CODE', 'DATASET', 'DOCUMENTATION', 'LOGS']),
+      artifactContent: z.string().describe('Raw code, JSON, or documentation payload'),
+      milestoneSequence: z.number().int().optional().default(1),
+    },
+    async (args: any) => {
+      const result = await executeSynapseTool('synapse_submit_deliverable', args, contractManager, arbitrator);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  mcpServer.tool(
+    'synapse_get_contract_status',
+    'Inspect full contract details, escrow state, timeline, and cryptographic HMAC audit trail.',
+    {
+      contractId: z.string(),
+    },
+    async (args: any) => {
+      const result = await executeSynapseTool('synapse_get_contract_status', args, contractManager, arbitrator);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  mcpServer.tool(
+    'synapse_get_agent_reputation',
+    'Query verifiable performance history, dispute rate, and Ed25519 signed attestation for an AI agent.',
+    {
+      agentId: z.string(),
+    },
+    async (args: any) => {
+      const result = await executeSynapseTool('synapse_get_agent_reputation', args, contractManager, arbitrator);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  mcpServer.tool(
+    'synapse_verify_verdict',
+    'Cryptographic verification of an arbitration verdict using trusted arbitrator public key.',
+    {
+      verdict: z.any().describe('The ArbitrationVerdict object to verify'),
+      trustedPublicKeyHex: z.string().optional().describe('Optional trusted public key hex'),
+    },
+    async (args: any) => {
+      const result = await executeSynapseTool('synapse_verify_verdict', args, contractManager, arbitrator);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    }
+  );
 }

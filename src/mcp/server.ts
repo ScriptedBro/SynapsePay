@@ -1,9 +1,6 @@
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import {
-  ListToolsRequestSchema,
-  CallToolRequestSchema,
-} from '@modelcontextprotocol/sdk/types.js';
+import { PayPalAgentToolkit } from '@paypal/agent-toolkit/mcp';
+import { ALL_TOOLS_ENABLED } from '@paypal/agent-toolkit/ai-sdk';
 
 import { config } from '../config.js';
 import { PayPalClient } from '../paypal/client.js';
@@ -11,7 +8,28 @@ import { PayPalOrdersManager } from '../paypal/orders.js';
 import { PayPalPayoutsManager } from '../paypal/payouts.js';
 import { SynapseArbitrator } from '../arbitration/arbitrator.js';
 import { ContractManager } from '../core/contract-manager.js';
-import { getSynapseToolDefinitions, executeSynapseTool } from './tools.js';
+import { registerSynapseTools } from './tools.js';
+
+/**
+ * Creates the unified MCP Server uniting official PayPal Agent Toolkit tools (47 tools)
+ * with SynapsePay's Autonomous A2A Escrow, Arbitration & Reputation tools (10 tools).
+ */
+export function createUnifiedMcpServer(
+  contractManager: ContractManager,
+  arbitrator: SynapseArbitrator,
+  accessToken: string = 'synapse_ephemeral_token'
+): PayPalAgentToolkit {
+  const server = new PayPalAgentToolkit({
+    accessToken,
+    configuration: {
+      actions: ALL_TOOLS_ENABLED,
+      context: { sandbox: config.PAYPAL_MODE !== 'live' },
+    },
+  });
+
+  registerSynapseTools(server, contractManager, arbitrator);
+  return server;
+}
 
 async function main() {
   const paypalClient = new PayPalClient({
@@ -38,63 +56,25 @@ async function main() {
   // Seed sample contracts for living ecosystem context
   contractManager.seedSampleContracts();
 
-  const server = new Server(
-    {
-      name: 'synapsepay-mcp',
-      version: '1.0.0',
-    },
-    {
-      capabilities: {
-        tools: {},
-      },
+  let accessToken = 'synapse_ephemeral_token';
+  try {
+    if (config.PAYPAL_CLIENT_ID && config.PAYPAL_CLIENT_SECRET) {
+      accessToken = await paypalClient.getAccessToken();
     }
-  );
+  } catch (e: any) {
+    console.error(`[SynapsePay MCP Server] Notice: Initial token fetch skipped (${e.message}), using sandbox mode`);
+  }
 
-  const toolDefs = getSynapseToolDefinitions();
-
-  // Register tools list
-  server.setRequestHandler(ListToolsRequestSchema, async () => {
-    return {
-      tools: toolDefs.map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-        inputSchema: tool.parameters,
-      })),
-    };
-  });
-
-  // Handle tool calls
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const { name, arguments: toolArgs } = request.params;
-    try {
-      const result = await executeSynapseTool(name, toolArgs, contractManager, arbitrator);
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify(result, null, 2),
-          },
-        ],
-      };
-    } catch (error: any) {
-      return {
-        isError: true,
-        content: [
-          {
-            type: 'text',
-            text: `SynapsePay Error: ${error.message || String(error)}`,
-          },
-        ],
-      };
-    }
-  });
+  const server = createUnifiedMcpServer(contractManager, arbitrator, accessToken);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error('[SynapsePay MCP Server] Started and connected to stdio transport');
+  console.error('[SynapsePay MCP Server] Unified PayPal Agent Toolkit & SynapsePay server connected to stdio transport');
 }
 
-main().catch((err) => {
-  console.error('[SynapsePay MCP Server] Fatal startup error:', err);
-  process.exit(1);
-});
+if (process.argv[1]?.endsWith('mcp/server.js') || process.argv[1]?.endsWith('mcp/server.ts')) {
+  main().catch((err) => {
+    console.error('[SynapsePay MCP Server] Fatal startup error:', err);
+    process.exit(1);
+  });
+}

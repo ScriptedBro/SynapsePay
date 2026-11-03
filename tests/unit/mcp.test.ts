@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { getSynapseToolDefinitions, executeSynapseTool } from '../../src/mcp/tools.js';
+import { createUnifiedMcpServer } from '../../src/mcp/server.js';
 import { ContractManager } from '../../src/core/contract-manager.js';
 import { SynapseArbitrator } from '../../src/arbitration/arbitrator.js';
 import { PayPalOrdersManager } from '../../src/paypal/orders.js';
@@ -180,5 +181,32 @@ describe('MCP Agent Tools Integration (P1 Fix 14 & 15)', () => {
     expect(reputation.agentId).toBe(workerId);
     expect(reputation.arbitratorPublicKey).toBe(arbitrator.getPublicKey());
     expect(reputation.attestationSignature).toBeDefined();
+  });
+
+  it('initializes unified MCP server combining 47 official PayPal tools with 10 SynapsePay tools', () => {
+    const { contractManager, arbitrator } = createTestSetup();
+    const server = createUnifiedMcpServer(contractManager, arbitrator);
+    const registered = (server as any)._registeredTools;
+    const toolNames = Object.keys(registered);
+
+    expect(toolNames.length).toBe(57);
+    // Official PayPal tools from @paypal/agent-toolkit
+    expect(toolNames).toContain('create_invoice');
+    expect(toolNames).toContain('list_invoices');
+    expect(toolNames).toContain('pay_order');
+    expect(toolNames).toContain('list_disputes');
+    expect(toolNames).toContain('get_dispute');
+    expect(toolNames).toContain('list_transactions');
+    // SynapsePay Autonomous Escrow tools
+    expect(toolNames).toContain('synapse_browse_bounties');
+    expect(toolNames).toContain('synapse_deploy_contract');
+    expect(toolNames).toContain('synapse_lock_escrow');
+    expect(toolNames).toContain('synapse_propose_terms');
+    expect(toolNames).toContain('synapse_accept_terms');
+    expect(toolNames).toContain('synapse_accept_bounty');
+    expect(toolNames).toContain('synapse_submit_deliverable');
+    expect(toolNames).toContain('synapse_get_contract_status');
+    expect(toolNames).toContain('synapse_get_agent_reputation');
+    expect(toolNames).toContain('synapse_verify_verdict');
   });
 });

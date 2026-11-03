@@ -1,3 +1,5 @@
+import { Client, Environment, OrdersController, PaymentsController } from '@paypal/paypal-server-sdk';
+
 export interface PayPalClientOptions {
   clientId: string;
   clientSecret: string;
@@ -10,6 +12,13 @@ export class PayPalClient {
   private readonly clientSecret: string;
   private cachedToken?: { token: string; expiresAt: number };
 
+  /** Official PayPal Server SDK client instance */
+  public readonly serverSdkClient: Client;
+  /** Official PayPal Server SDK OrdersController (Orders & Authorization lifecycle) */
+  public readonly ordersController: OrdersController;
+  /** Official PayPal Server SDK PaymentsController (Captures, Voids, Refunds) */
+  public readonly paymentsController: PaymentsController;
+
   constructor(options: PayPalClientOptions) {
     this.clientId = options.clientId;
     this.clientSecret = options.clientSecret;
@@ -17,6 +26,17 @@ export class PayPalClient {
       options.mode === 'live'
         ? 'https://api-m.paypal.com'
         : 'https://api-m.sandbox.paypal.com';
+
+    this.serverSdkClient = new Client({
+      clientCredentialsAuthCredentials: {
+        oAuthClientId: options.clientId,
+        oAuthClientSecret: options.clientSecret,
+      },
+      environment: options.mode === 'live' ? Environment.Production : Environment.Sandbox,
+    });
+
+    this.ordersController = new OrdersController(this.serverSdkClient);
+    this.paymentsController = new PaymentsController(this.serverSdkClient);
   }
 
   public getBaseUrl(): string {

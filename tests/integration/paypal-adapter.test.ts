@@ -23,6 +23,14 @@ describe('PayPal Adapters (Orders, Payouts, Client)', () => {
     expect(client.getBaseUrl()).toBe('https://api-m.sandbox.paypal.com');
   });
 
+  it('initializes official PayPal Server SDK client and controllers', () => {
+    expect(client.serverSdkClient).toBeDefined();
+    expect(client.ordersController).toBeDefined();
+    expect(client.paymentsController).toBeDefined();
+    expect(typeof client.ordersController.createOrder).toBe('function');
+    expect(typeof client.paymentsController.captureAuthorizedPayment).toBe('function');
+  });
+
   it('creates an authorization order via PayPalOrdersManager', async () => {
     const mockOrderResponse = {
       id: 'ORD_UNIT_TEST_999',
